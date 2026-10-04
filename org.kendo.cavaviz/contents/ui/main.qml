@@ -9,9 +9,10 @@ PlasmoidItem {
     id: root
 
     // ---------- Valores fijos ----------
-    readonly property int pollMs: 16            // ~60 fps
+    readonly property int fps: Plasmoid.configuration.fps
+    readonly property int pollMs: Math.round(1000 / fps)
     readonly property int colorsMs: 2000        // cada cuánto se revisan los colores (el puente usa caché)
-    readonly property int silenceFrames: 120    // ~2 s
+    readonly property int silenceFrames: fps * 2   // 2 segundos, sin importar los fps
     readonly property string bridgeUrl: "http://127.0.0.1:8765/"
 
     // ---------- Valores del panel de configuración (main.xml) ----------
@@ -61,6 +62,9 @@ PlasmoidItem {
     property var peaks: []
     property int silentCount: 0
     property bool busy: false
+    property string lastFrame: ""               // para no redibujar si el puente devuelve el mismo frame
+    property int lastSum: -1                    // suma del último frame (0 = silencio)
+    property bool peaksActive: false            // si queda algún peak por caer
     property bool bridgePaused: false           // el puente congeló cava (pantalla bloqueada o completa)
     property real bassEnergy: 0                 // 0-1, energía de los graves para el glow
     property real bassPeak: 0.2                 // pico reciente de graves, para normalizar el glow
@@ -102,11 +106,12 @@ PlasmoidItem {
     // Al cambiar el ancho o el grosor, espera a que termine el ajuste antes de reiniciar cava
     onBarCountChanged: { barsDebounce.restart(); glowDebounce.restart() }
     onAudioChannelsChanged: barsDebounce.restart()
+    onFpsChanged: barsDebounce.restart()
     Timer {
         id: barsDebounce
         interval: 600
-        onTriggered: root.get("bars?n=" + root.barCount + "&ch=" + (root.audioChannels === 1 ? "mono" : "stereo"),
-                              function () { root.fetchColors() })
+        onTriggered: root.get("bars?n=" + root.barCount + "&ch=" + (root.audioChannels === 1 ? "mono" : "stereo")
+                              + "&fps=" + root.fps, function () { root.fetchColors() })
     }
 
     onColorModeChanged: fetchColors()
@@ -277,6 +282,28 @@ PlasmoidItem {
 
     // ---------- Datos de audio ----------
     function applyFrame(text) {
+        // Mismo frame que el anterior (el widget consultó antes de que cava generara uno nuevo):
+        // no se toca nada, así las ~190 barras no se recalculan para quedar igual
+        if (text === lastFrame && text !== "") {
+            // Mismo frame: las barras no cambian, pero en silencio hay que seguir contando
+            // (para ocultar el widget) y dejar caer peaks y glow hasta 0
+            if (lastSum === 0) {
+                silentCount++
+                if (peaksActive) {
+                    var pk2 = [], any = false
+                    for (var j = 0; j < peaks.length; j++) {
+                        var p = Math.max(0, peaks[j] - peakFall)
+                        pk2.push(p)
+                        if (p > 0) any = true
+                    }
+                    peaks = pk2
+                    peaksActive = any   // cuando todos llegan a 0, deja de redibujar
+                }
+                if (bassEnergy > 0.01) bassEnergy *= 0.9
+            }
+            return
+        }
+        lastFrame = text
         bridgePaused = (text === "P")   // "P": cava en pausa, se consulta 1 vez por segundo
         var parts = bridgePaused ? [] : text.split(";")
         var lv = []
@@ -292,6 +319,8 @@ PlasmoidItem {
             if (bassT(i) < 0.15) { bassSum += v; bassN++ }   // el 15% más grave
         }
         silentCount = (sum === 0) ? silentCount + 1 : 0
+        lastSum = sum
+        peaksActive = true
         levels = lv
         peaks = pk
         // Glow: se normaliza contra el pico reciente (el golpe más fuerte de los últimos
@@ -361,6 +390,39 @@ PlasmoidItem {
 
         readonly property real slotWidth: width / root.barCount
 
+        // Glow: capa aparte, dibujada antes (debajo) de las barras.
+        // La opacidad se calcula UNA vez para toda la capa en cada frame, en lugar de una vez
+        // por cada rectángulo (antes ~380 cálculos por frame, el 60% del CPU del widget).
+        Item {
+            id: glowLayer
+            anchors.fill: parent
+            visible: root.glowEnabled
+            opacity: root.glowStrength * (0.1 + 0.9 * root.bassEnergy) * 0.45
+
+            Repeater {
+                model: root.glowEnabled ? root.barCount : 0   // apagado: no crea ningún rectángulo
+
+                Rectangle {
+                    readonly property real lv: (root.levels[index] || 0) / 100
+                    readonly property real barW: Math.min(root.barWidth, area.slotWidth)
+                    readonly property real spread: Math.max(2, barW)
+                    readonly property real line: area.height * root.mirrorLine
+                    readonly property real h: root.orientation === 1
+                                              ? Math.max(1, line * lv)
+                                              : Math.max(2, area.height * lv)
+                    x: index * area.slotWidth + (area.slotWidth - barW) / 2 - spread
+                    width: barW + 2 * spread
+                    height: h + 2 * spread
+                    y: (root.orientation === 0 ? area.height - h
+                        : root.orientation === 1 ? line - h
+                        : (area.height - h) / 2) - spread
+                    radius: width / 2
+                    color: (root.glowColorMode === 1 && root.glowColors.length === root.barCount)
+                           ? root.glowColors[index] : root.barColor(index)
+                }
+            }
+        }
+
         Repeater {
             model: root.barCount
 
@@ -372,11 +434,6 @@ PlasmoidItem {
 
                 property color c: root.barColor(index)
                 Behavior on c { ColorAnimation { duration: 600 } }   // al cambiar wallpaper o modo, el color se desliza en vez de saltar
-                // Color del glow: el de la barra, o el de contraste con el fondo si está disponible
-                property color glowTint: (root.glowColorMode === 1 && root.glowColors.length === root.barCount)
-                                   ? root.glowColors[index]
-                                   : c
-                Behavior on glowTint { ColorAnimation { duration: 600 } }
                 readonly property real lv: (root.levels[index] || 0) / 100
                 readonly property real pk: (root.peaks[index] || 0) / 100
                 readonly property real barW: Math.min(root.barWidth, width)
@@ -395,32 +452,6 @@ PlasmoidItem {
                     y: root.orientation === 0 ? slot.height - height
                      : root.orientation === 1 ? slot.line - height
                      : (slot.height - height) / 2
-
-                    // Glow en dos capas detrás de la barra (z: -1 las dibuja debajo).
-                    // Rectángulos semitransparentes: mucho más baratos que un blur real.
-                    // Base mínima de 10% para que el halo se vea aunque no haya bajo.
-                    Rectangle {  // capa exterior: amplia y suave
-                        visible: root.glowEnabled
-                        z: -2
-                        anchors.centerIn: parent
-                        readonly property real spread: Math.max(4, slot.barW * 2)
-                        width: parent.width + 2 * spread
-                        height: parent.height + 2 * spread
-                        radius: width / 2
-                        color: slot.glowTint
-                        opacity: root.glowStrength * (0.1 + 0.9 * root.bassEnergy) * 0.2
-                    }
-                    Rectangle {  // capa interior: pegada a la barra y más intensa
-                        visible: root.glowEnabled
-                        z: -1
-                        anchors.centerIn: parent
-                        readonly property real spread: Math.max(2, slot.barW)
-                        width: parent.width + 2 * spread
-                        height: parent.height + 2 * spread
-                        radius: width / 2
-                        color: slot.glowTint
-                        opacity: root.glowStrength * (0.1 + 0.9 * root.bassEnergy) * 0.45
-                    }
                 }
 
                 // Reflejo (solo espejo): usa el espacio bajo la línea y se desvanece

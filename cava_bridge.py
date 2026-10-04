@@ -3,7 +3,7 @@
 Endpoints (solo 127.0.0.1):
   /                                   último frame de cava ("12;45;80;...")
   /pause, /resume                     congela / reanuda cava (pantalla completa)
-  /bars?n=N&ch=stereo|mono            cambia barras y canales, y reinicia cava
+  /bars?n=N&ch=stereo|mono&fps=F      cambia barras, canales y frames por segundo, y reinicia cava
   (si cava está en pausa por pantalla completa o bloqueo, "/" responde "P")
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
   /zones?n=&l=&r=&swap=&aspect=&cid=  un color por barra según la columna del wallpaper;
@@ -70,14 +70,19 @@ def read_channels():
 
 bars = read_bars()
 channels = read_channels()
+fps = 60
 
 
 # ---------------- cava ----------------
 
 def write_runtime_conf():
-    # Copia raw.conf cambiando solo "bars" y "channels". Tu raw.conf original no se modifica.
+    # Copia raw.conf cambiando solo "bars", "channels" y "framerate". Tu raw.conf original no se modifica.
     text = open(CONF).read()
     text = re.sub(r"(?m)^\s*bars\s*=.*$", f"bars = {bars}", text)
+    if re.search(r"(?m)^\s*framerate\s*=", text):
+        text = re.sub(r"(?m)^\s*framerate\s*=.*$", f"framerate = {fps}", text)
+    else:
+        text = re.sub(r"(?m)^\[general\]\s*$", f"[general]\nframerate = {fps}", text, count=1)
     if re.search(r"(?m)^\s*channels\s*=", text):
         text = re.sub(r"(?m)^\s*channels\s*=.*$", f"channels = {channels}", text)
     else:
@@ -109,15 +114,16 @@ def signal_cava(sig):
             proc.send_signal(sig)
 
 
-def set_audio(n, ch):
-    global bars, channels
+def set_audio(n, ch, f):
+    global bars, channels, fps
     n = max(16, min(300, n))
     n -= n % 2  # en stereo cava reparte mitad y mitad
     ch = ch if ch in ("stereo", "mono") else channels
-    if n == bars and ch == channels:
+    f = max(15, min(60, f))
+    if n == bars and ch == channels and f == fps:
         return
-    bars, channels = n, ch
-    log(f"cava: {bars} barras, {channels}")
+    bars, channels, fps = n, ch, f
+    log(f"cava: {bars} barras, {channels}, {fps} fps")
     signal_cava(signal.SIGCONT)  # un proceso congelado no procesa SIGTERM
     signal_cava(signal.SIGTERM)  # cava_loop lo relanza con la config nueva
 
@@ -630,7 +636,7 @@ class Handler(BaseHTTPRequestHandler):
             pause_reasons.discard("fullscreen")
             update_pause()
         elif url.path == "/bars":
-            set_audio(int(q.get("n", bars)), q.get("ch", channels))
+            set_audio(int(q.get("n", bars)), q.get("ch", channels), int(q.get("fps", fps)))
         elif url.path == "/next":
             # Sin filtro de tiempo: la rotación aplica un cambio a la vez, así que los clics
             # que lleguen mientras Plasma aplica uno se juntan en un solo "siguiente"

@@ -20,6 +20,8 @@
     <entry name="showPeaks" type="Bool"><default>true</default></entry>
     <entry name="peakFall" type="Double"><default>0.8</default></entry>
     <entry name="hideOnSilence" type="Bool"><default>true</default></entry>
+    <!-- Cuadros por segundo del visualizer (30, 45 o 60). Menos fps = menos CPU -->
+    <entry name="fps" type="Int"><default>60</default></entry>
     <!-- Audio: 0 = stereo, 1 = mono -->
     <entry name="audioChannels" type="Int"><default>0</default></entry>
     <!-- 0 = normal (stereo: graves al centro, mono: graves a la izquierda), 1 = invertida -->

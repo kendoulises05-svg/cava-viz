@@ -18,6 +18,8 @@ KCM.SimpleKCM {
     property alias cfg_glowEnabled: glowEnabled.checked
     property alias cfg_glowStrength: glowStrength.value
     property alias cfg_glowColorMode: glowColorMode.currentIndex
+    // fps se guarda como número (30/45/60), no como posición en la lista
+    property int cfg_fps
 
     Kirigami.FormLayout {
 
@@ -109,6 +111,21 @@ KCM.SimpleKCM {
         QQC2.Label {
             visible: glowColorMode.currentIndex === 1
             text: "Cada barra usa el color de otra barra que más se diferencia del suyo\n(rojas con glow blanco, blancas con glow rojo)."
+            opacity: 0.7
+        }
+
+        Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Rendimiento" }
+
+        QQC2.ComboBox {
+            id: fpsBox
+            Kirigami.FormData.label: "Cuadros por segundo:"
+            model: [30, 45, 60]
+            currentIndex: Math.max(0, model.indexOf(cfg_fps))
+            onActivated: cfg_fps = model[currentIndex]
+        }
+
+        QQC2.Label {
+            text: "30 fps usa cerca de la mitad de CPU que 60 y a simple vista se nota poco.\nEl glow es la opción que más CPU consume."
             opacity: 0.7
         }
 
