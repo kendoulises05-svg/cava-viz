@@ -17,6 +17,7 @@ KCM.SimpleKCM {
     property alias cfg_bassLayout: bassLayout.currentIndex
     property alias cfg_glowEnabled: glowEnabled.checked
     property alias cfg_glowStrength: glowStrength.value
+    property alias cfg_glowColorMode: glowColorMode.currentIndex
 
     Kirigami.FormLayout {
 
@@ -96,6 +97,19 @@ KCM.SimpleKCM {
             enabled: glowEnabled.checked
             QQC2.Slider { id: glowStrength; from: 0.1; to: 1.0; stepSize: 0.05 }
             QQC2.Label { text: Math.round(glowStrength.value * 100) + "%" }
+        }
+
+        QQC2.ComboBox {
+            id: glowColorMode
+            Kirigami.FormData.label: "Color del glow:"
+            enabled: glowEnabled.checked
+            model: ["Igual a la barra", "Contraste con la barra (automático)"]
+        }
+
+        QQC2.Label {
+            visible: glowColorMode.currentIndex === 1
+            text: "Cada barra usa el color de otra barra que más se diferencia del suyo\n(rojas con glow blanco, blancas con glow rojo)."
+            opacity: 0.7
         }
 
         Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Comportamiento" }

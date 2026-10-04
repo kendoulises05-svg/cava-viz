@@ -26,6 +26,7 @@ PlasmoidItem {
     readonly property int bassLayout: Plasmoid.configuration.bassLayout         // 0 normal, 1 invertida
     readonly property bool glowEnabled: Plasmoid.configuration.glowEnabled
     readonly property real glowStrength: Plasmoid.configuration.glowStrength
+    readonly property int glowColorMode: Plasmoid.configuration.glowColorMode   // 0 igual a la barra, 1 contraste con la barra
     readonly property bool showPeaks: Plasmoid.configuration.showPeaks
     readonly property real peakFall: Plasmoid.configuration.peakFall
     readonly property bool hideOnSilence: Plasmoid.configuration.hideOnSilence
@@ -62,6 +63,8 @@ PlasmoidItem {
     property bool busy: false
     property bool bridgePaused: false           // el puente congeló cava (pantalla bloqueada o completa)
     property real bassEnergy: 0                 // 0-1, energía de los graves para el glow
+    property real bassPeak: 0.2                 // pico reciente de graves, para normalizar el glow
+    property var glowColors: []                 // un color por barra: el que más contrasta con esa barra
     property bool fullscreenActive: false
 
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
@@ -97,7 +100,7 @@ PlasmoidItem {
     }
 
     // Al cambiar el ancho o el grosor, espera a que termine el ajuste antes de reiniciar cava
-    onBarCountChanged: barsDebounce.restart()
+    onBarCountChanged: { barsDebounce.restart(); glowDebounce.restart() }
     onAudioChannelsChanged: barsDebounce.restart()
     Timer {
         id: barsDebounce
@@ -107,6 +110,55 @@ PlasmoidItem {
     }
 
     onColorModeChanged: fetchColors()
+    // ---------- Color del glow por contraste con la barra ----------
+    // Cuando cambia cualquier cosa que afecta el color de las barras, se recalcula
+    // (con 100 ms de espera para no repetir el cálculo varias veces seguidas)
+    onZoneColorsChanged: glowDebounce.restart()
+    onWallSecondChanged: glowDebounce.restart()
+    onBaseColorChanged: glowDebounce.restart()
+    onColorBlendChanged: glowDebounce.restart()
+    onBassLayoutChanged: glowDebounce.restart()
+    onGlowEnabledChanged: glowDebounce.restart()
+    onGlowColorModeChanged: glowDebounce.restart()
+    Timer {
+        id: glowDebounce
+        interval: 100
+        onTriggered: root.recomputeGlow()
+    }
+
+    function colorDist(a, b) {
+        var dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b
+        return Math.sqrt(dr * dr + dg * dg + db * db)   // 0 iguales, ~1.73 blanco vs negro
+    }
+
+    function recomputeGlow() {
+        if (!glowEnabled || glowColorMode !== 1) { glowColors = []; return }
+        var n = barCount, cols = [], i, k
+        for (i = 0; i < n; i++) cols.push(barColor(i))
+        // Colores distintos presentes en las barras (se agrupan los casi iguales)
+        var pool = []
+        for (i = 0; i < n && pool.length < 6; i++) {
+            var dup = false
+            for (k = 0; k < pool.length; k++) if (colorDist(cols[i], pool[k]) < 0.25) { dup = true; break }
+            if (!dup) pool.push(cols[i])
+        }
+        var white = Qt.rgba(1, 1, 1, 1)
+        var out = []
+        for (i = 0; i < n; i++) {
+            var best = null, bestD = -1
+            for (k = 0; k < pool.length; k++) {
+                var d = colorDist(cols[i], pool[k])
+                if (d > bestD) { bestD = d; best = pool[k] }
+            }
+            if (bestD < 0.25) {
+                // Todas las barras casi del mismo color: blanco, o el accent si la barra ya es clara
+                var lum = 0.2126 * cols[i].r + 0.7152 * cols[i].g + 0.0722 * cols[i].b
+                best = (lum < 0.6 || colorDist(cols[i], baseColor) < 0.25) ? white : baseColor
+            }
+            out.push(best)
+        }
+        glowColors = out
+    }
     onZoneSwapChanged: fetchColors()
 
     // Envía la config de rotación al puente (él solo la guarda si cambió)
@@ -242,9 +294,13 @@ PlasmoidItem {
         silentCount = (sum === 0) ? silentCount + 1 : 0
         levels = lv
         peaks = pk
-        // Glow: sube de golpe con un golpe de bajo y cae despacio, así "pulsa"
+        // Glow: se normaliza contra el pico reciente (el golpe más fuerte de los últimos
+        // segundos vale 1), así pulsa con todo el rango aunque los graves nunca lleguen a 100
         var bass = bassN ? bassSum / bassN / 100 : 0
-        bassEnergy = bass > bassEnergy ? bass : bassEnergy * 0.9
+        bassPeak = Math.max(bass, bassPeak * 0.997, 0.05)
+        var norm = Math.min(1, bass / bassPeak)
+        // Sube de golpe con el bajo y cae despacio, así "pulsa"
+        bassEnergy = norm > bassEnergy ? norm : bassEnergy * 0.9
     }
 
     Timer {
@@ -316,6 +372,11 @@ PlasmoidItem {
 
                 property color c: root.barColor(index)
                 Behavior on c { ColorAnimation { duration: 600 } }   // al cambiar wallpaper o modo, el color se desliza en vez de saltar
+                // Color del glow: el de la barra, o el de contraste con el fondo si está disponible
+                property color glowTint: (root.glowColorMode === 1 && root.glowColors.length === root.barCount)
+                                   ? root.glowColors[index]
+                                   : c
+                Behavior on glowTint { ColorAnimation { duration: 600 } }
                 readonly property real lv: (root.levels[index] || 0) / 100
                 readonly property real pk: (root.peaks[index] || 0) / 100
                 readonly property real barW: Math.min(root.barWidth, width)
@@ -335,18 +396,30 @@ PlasmoidItem {
                      : root.orientation === 1 ? slot.line - height
                      : (slot.height - height) / 2
 
-                    // Glow: halo del mismo color detrás de la barra (z: -1 lo dibuja debajo).
-                    // Un rectángulo semitransparente es mucho más barato que un blur real.
-                    Rectangle {
-                        visible: root.glowEnabled && opacity > 0.01
+                    // Glow en dos capas detrás de la barra (z: -1 las dibuja debajo).
+                    // Rectángulos semitransparentes: mucho más baratos que un blur real.
+                    // Base mínima de 10% para que el halo se vea aunque no haya bajo.
+                    Rectangle {  // capa exterior: amplia y suave
+                        visible: root.glowEnabled
+                        z: -2
+                        anchors.centerIn: parent
+                        readonly property real spread: Math.max(4, slot.barW * 2)
+                        width: parent.width + 2 * spread
+                        height: parent.height + 2 * spread
+                        radius: width / 2
+                        color: slot.glowTint
+                        opacity: root.glowStrength * (0.1 + 0.9 * root.bassEnergy) * 0.2
+                    }
+                    Rectangle {  // capa interior: pegada a la barra y más intensa
+                        visible: root.glowEnabled
                         z: -1
                         anchors.centerIn: parent
                         readonly property real spread: Math.max(2, slot.barW)
                         width: parent.width + 2 * spread
                         height: parent.height + 2 * spread
                         radius: width / 2
-                        color: slot.c
-                        opacity: root.glowStrength * root.bassEnergy * 0.5
+                        color: slot.glowTint
+                        opacity: root.glowStrength * (0.1 + 0.9 * root.bassEnergy) * 0.45
                     }
                 }
 

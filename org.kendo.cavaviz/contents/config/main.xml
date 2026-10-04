@@ -27,6 +27,8 @@
     <!-- Glow que pulsa con los graves -->
     <entry name="glowEnabled" type="Bool"><default>false</default></entry>
     <entry name="glowStrength" type="Double"><default>0.6</default></entry>
+    <!-- 0 = mismo color que la barra, 1 = contraste con la barra (automático) -->
+    <entry name="glowColorMode" type="Int"><default>1</default></entry>
     <!-- Rotación de wallpaper (la ejecuta el puente) -->
     <entry name="rotationEnabled" type="Bool"><default>true</default></entry>
     <!-- Vacío = carpeta de la presentación de Plasma -->
