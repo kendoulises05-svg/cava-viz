@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+  <kcfgfile name=""/>
+  <group name="General">
+    <!-- Fracción del espacio que ocupa cada barra (1 = sin hueco) -->
+    <entry name="barFill" type="Double"><default>0.45</default></entry>
+    <!-- 0 = desde abajo, 1 = espejo, 2 = flotante -->
+    <entry name="orientation" type="Int"><default>0</default></entry>
+    <entry name="mirrorOpacity" type="Double"><default>0.35</default></entry>
+    <!-- Color de los agudos (fase 2: vendrá del wallpaper) -->
+    <entry name="secondaryColor" type="Color"><default>#7b3fa0</default></entry>
+    <!-- 0 = todo color accent, 1 = agudos llegan al color secundario completo -->
+    <entry name="colorBlend" type="Double"><default>0.85</default></entry>
+    <entry name="bassCenter" type="Bool"><default>true</default></entry>
+    <entry name="showPeaks" type="Bool"><default>true</default></entry>
+    <entry name="peakFall" type="Double"><default>0.8</default></entry>
+    <entry name="hideOnSilence" type="Bool"><default>true</default></entry>
+  </group>
+</kcfg>

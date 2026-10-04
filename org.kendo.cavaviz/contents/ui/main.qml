@@ -8,21 +8,26 @@ import org.kde.taskmanager as TaskManager
 PlasmoidItem {
     id: root
 
-    // ---------- Ajustes (cámbialos aquí) ----------
+    // ---------- Valores fijos (no están en el panel) ----------
     readonly property int barCount: 80          // debe coincidir con bars en raw.conf
-    readonly property int pollMs: 16            // ~60 fps, igual que framerate de cava
-    readonly property real barSpacing: 2        // px entre barras
-    readonly property real barFill: 0.6        // fracción del espacio que ocupa cada barra (1 = sin hueco)
-    readonly property real peakFall: 0.8        // cuánto cae el peak cap por frame (escala 0-100)
-    readonly property int silenceFrames: 120    // frames en silencio antes de ocultar (~2 s)
-    readonly property real trebleWhite: 0.75    // 0 = agudos igual que graves, 1 = agudos blancos
-    readonly property bool useAccent: true      // false = usar fallbackColor fijo
-    readonly property bool bassCenter: true     // false si la prueba de tonos muestra graves en los bordes
-    readonly property color fallbackColor: "#00e5ff"
+    readonly property int pollMs: 16            // ~60 fps
+    readonly property real barSpacing: 2
+    readonly property int silenceFrames: 120    // ~2 s
     readonly property string bridgeUrl: "http://127.0.0.1:8765/"
 
-    // Color base: el accent del tema de Plasma (sigue al wallpaper si lo activas en Colors)
-    readonly property color baseColor: useAccent ? Kirigami.Theme.highlightColor : fallbackColor
+    // ---------- Valores del panel de configuración (main.xml) ----------
+    readonly property real barFill: Plasmoid.configuration.barFill
+    readonly property int orientation: Plasmoid.configuration.orientation   // 0 abajo, 1 espejo, 2 flotante
+    readonly property real mirrorOpacity: Plasmoid.configuration.mirrorOpacity
+    readonly property color secondaryColor: Plasmoid.configuration.secondaryColor
+    readonly property real colorBlend: Plasmoid.configuration.colorBlend
+    readonly property bool bassCenter: Plasmoid.configuration.bassCenter
+    readonly property bool showPeaks: Plasmoid.configuration.showPeaks
+    readonly property real peakFall: Plasmoid.configuration.peakFall
+    readonly property bool hideOnSilence: Plasmoid.configuration.hideOnSilence
+
+    // Color de graves: accent del tema
+    readonly property color baseColor: Kirigami.Theme.highlightColor
 
     property var levels: new Array(barCount).fill(0)
     property var peaks: new Array(barCount).fill(0)
@@ -30,10 +35,13 @@ PlasmoidItem {
     property bool busy: false
     property bool fullscreenActive: false
 
+    Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
+    preferredRepresentation: fullRepresentation
+
+    // ---------- Detección de pantalla completa ----------
     TaskManager.VirtualDesktopInfo { id: vdInfo }
     TaskManager.ActivityInfo { id: actInfo }
 
-    // Solo ventanas visibles en este escritorio, actividad y pantalla
     TaskManager.TasksModel {
         id: tasks
         groupMode: TaskManager.TasksModel.GroupDisabled
@@ -65,32 +73,29 @@ PlasmoidItem {
         x.send()
     }
 
-    Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
-    preferredRepresentation: fullRepresentation
-
-    // Stereo de cava: graves al centro, agudos en los extremos.
-    // t = 0 en el centro (color puro), t = 1 en los bordes (más blanco)
+    // ---------- Color ----------
+    // t = 0 en graves (accent puro), t = 1 en agudos (mezclado con secondaryColor).
+    // Qt.tint usa el alpha del segundo color como cantidad de mezcla.
     function barColor(i) {
         var center = (barCount - 1) / 2
         var t = Math.abs(i - center) / center
         if (!bassCenter) t = 1 - t
-            return Qt.tint(baseColor, Qt.rgba(1, 1, 1, t * trebleWhite))
+        return Qt.tint(baseColor, Qt.rgba(secondaryColor.r, secondaryColor.g, secondaryColor.b, t * colorBlend))
     }
 
-    // Convierte "12;45;80;...;" en arrays de niveles y peaks
+    // ---------- Datos ----------
     function applyFrame(text) {
         var parts = text.split(";")
         var lv = []
         var pk = peaks.slice()
         var sum = 0
         for (var i = 0; i < barCount; i++) {
-            var v = parseInt(parts[i]) || 0     // el ";" final genera un elemento vacío: lo ignora
+            var v = parseInt(parts[i]) || 0
             lv.push(v)
             sum += v
             pk[i] = Math.max(v, pk[i] - peakFall)
         }
         silentCount = (sum === 0) ? silentCount + 1 : 0
-        // Asignar arrays nuevos (no mutar) para que QML detecte el cambio
         levels = lv
         peaks = pk
     }
@@ -100,21 +105,20 @@ PlasmoidItem {
         running: !root.fullscreenActive
         repeat: true
         onTriggered: {
-            if (root.busy) return               // no encimar requests si el puente tarda
+            if (root.busy) return
             root.busy = true
             var x = new XMLHttpRequest()
             x.open("GET", root.bridgeUrl)
             x.onreadystatechange = function () {
                 if (x.readyState !== 4) return
                 root.busy = false
-                // Si el puente no responde (status 0), se trata como silencio:
-                // las barras bajan y el widget se oculta solo
                 root.applyFrame(x.status === 200 ? x.responseText : "")
             }
             x.send()
         }
     }
 
+    // ---------- Dibujo ----------
     fullRepresentation: Item {
         id: area
         Layout.preferredWidth: 1200
@@ -122,40 +126,82 @@ PlasmoidItem {
         Layout.minimumWidth: 300
         Layout.minimumHeight: 80
 
-        opacity: root.silentCount > root.silenceFrames ? 0 : 1
+        opacity: (root.hideOnSilence && root.silentCount > root.silenceFrames) ? 0 : 1
         Behavior on opacity { NumberAnimation { duration: 600 } }
 
-        readonly property real barWidth:
+        readonly property real slotWidth:
             Math.max(1, (width - root.barSpacing * (root.barCount - 1)) / root.barCount)
 
         Repeater {
             model: root.barCount
 
             Item {
-                x: index * (area.barWidth + root.barSpacing)
-                width: area.barWidth
+                id: slot
+                x: index * (area.slotWidth + root.barSpacing)
+                width: area.slotWidth
                 height: area.height
 
                 readonly property color c: root.barColor(index)
+                readonly property real lv: root.levels[index] / 100
+                readonly property real pk: root.peaks[index] / 100
+                readonly property real half: height / 2
+                readonly property real barW: width * root.barFill
 
-                // Barra
+                // Barra principal
+                // abajo: crece desde el borde inferior
+                // espejo: crece hacia arriba desde la línea central
+                // flotante: centrada, crece igual hacia arriba y abajo
                 Rectangle {
-                    anchors.bottom: parent.bottom
-                    width: parent.width * root.barFill
+                    width: slot.barW
                     anchors.horizontalCenter: parent.horizontalCenter
-                    height: Math.max(2, parent.height * root.levels[index] / 100)
                     radius: width / 2
-                    color: parent.c
+                    color: slot.c
+                    height: root.orientation === 1
+                            ? Math.max(1, slot.half * slot.lv)
+                            : Math.max(2, slot.height * slot.lv)
+                    y: root.orientation === 0 ? slot.height - height
+                     : root.orientation === 1 ? slot.half - height
+                     : (slot.height - height) / 2
                 }
 
-                // Peak cap: línea fina que cae despacio
+                // Reflejo (solo espejo): misma altura, se desvanece hacia abajo
                 Rectangle {
-                    width: parent.width
+                    visible: root.orientation === 1
+                    width: slot.barW
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    radius: width / 2
+                    y: slot.half + 1
+                    height: Math.max(1, slot.half * slot.lv)
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: Qt.rgba(slot.c.r, slot.c.g, slot.c.b, root.mirrorOpacity) }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
+                }
+
+                // Peak superior
+                Rectangle {
+                    visible: root.showPeaks
+                    width: slot.barW
+                    anchors.horizontalCenter: parent.horizontalCenter
                     height: 2
-                    y: Math.max(0, parent.height - parent.height * root.peaks[index] / 100 - 4)
                     radius: 1
-                    color: parent.c
+                    color: slot.c
                     opacity: 0.85
+                    y: root.orientation === 0 ? Math.max(0, slot.height - slot.height * slot.pk - 4)
+                     : root.orientation === 1 ? Math.max(0, slot.half - slot.half * slot.pk - 4)
+                     : Math.max(0, (slot.height - slot.height * slot.pk) / 2 - 4)
+                }
+
+                // Peak inferior (solo flotante)
+                Rectangle {
+                    visible: root.showPeaks && root.orientation === 2
+                    width: slot.barW
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    height: 2
+                    radius: 1
+                    color: slot.c
+                    opacity: 0.85
+                    y: Math.min(slot.height - 2, (slot.height + slot.height * slot.pk) / 2 + 2)
                 }
             }
         }
