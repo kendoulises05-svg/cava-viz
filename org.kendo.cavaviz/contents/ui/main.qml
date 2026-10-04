@@ -26,6 +26,11 @@ PlasmoidItem {
     readonly property bool showPeaks: Plasmoid.configuration.showPeaks
     readonly property real peakFall: Plasmoid.configuration.peakFall
     readonly property bool hideOnSilence: Plasmoid.configuration.hideOnSilence
+    readonly property bool contrastComplementary: Plasmoid.configuration.contrastComplementary
+    readonly property bool rotationEnabled: Plasmoid.configuration.rotationEnabled
+    readonly property string rotationDir: Plasmoid.configuration.rotationDir
+    readonly property int rotationInterval: Plasmoid.configuration.rotationInterval   // minutos
+    readonly property int rotationOrder: Plasmoid.configuration.rotationOrder
 
     // ---------- Color ----------
     readonly property color baseColor: Kirigami.Theme.highlightColor
@@ -37,6 +42,8 @@ PlasmoidItem {
     property real areaWidth: 1200
     property real areaLeft: 0                   // borde izquierdo del widget en la pantalla (0-1)
     property real areaRight: 1                  // borde derecho del widget en la pantalla (0-1)
+    property real areaTop: 0.75                 // borde superior del widget en la pantalla (0-1)
+    property real areaBottom: 1                 // borde inferior del widget en la pantalla (0-1)
     property real screenAspect: 16 / 9
 
     // Cuántas barras caben con el grosor y hueco elegidos. Par, porque cava stereo reparte mitad y mitad.
@@ -54,6 +61,24 @@ PlasmoidItem {
 
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
     preferredRepresentation: fullRepresentation
+
+    // Clic derecho sobre el widget > Siguiente wallpaper
+    Plasmoid.contextualActions: [
+        PlasmaCore.Action {
+            text: "Siguiente wallpaper"
+            icon.name: "go-next"
+            visible: root.rotationEnabled
+            onTriggered: root.get("next", null)
+        }
+    ]
+
+    // Atajo de teclado: Configure > Keyboard Shortcuts del widget
+    Connections {
+        target: Plasmoid
+        function onActivated() {
+            if (root.rotationEnabled) root.get("next", null)
+        }
+    }
 
     // ---------- Comunicación con el puente ----------
     function get(path, callback) {
@@ -75,17 +100,36 @@ PlasmoidItem {
     }
 
     onColorModeChanged: fetchColors()
+    onContrastComplementaryChanged: fetchColors()
+
+    // Envía la config de rotación al puente (él solo la guarda si cambió)
+    function syncRotation() {
+        get("rotation?enabled=" + (rotationEnabled ? 1 : 0)
+            + "&dir=" + encodeURIComponent(rotationDir)
+            + "&interval=" + rotationInterval
+            + "&order=" + rotationOrder, null)
+    }
+    onRotationEnabledChanged: syncRotation()
+    onRotationDirChanged: syncRotation()
+    onRotationIntervalChanged: syncRotation()
+    onRotationOrderChanged: syncRotation()
+
+    function applyColors(t) {
+        if (!t) return
+        var c = JSON.parse(t).colors
+        // Lista vacía = el puente no sabe qué imagen hay (ej. presentación de Plasma): se usa el accent
+        zoneColors = (c.length === barCount) ? c : []
+    }
 
     function fetchColors() {
         var cid = Plasmoid.containment ? Plasmoid.containment.id : -1
         var common = "cid=" + cid + "&aspect=" + screenAspect.toFixed(4)
+        var span = "n=" + barCount + "&l=" + areaLeft.toFixed(4) + "&r=" + areaRight.toFixed(4)
         if (colorMode === 1) {
-            get("zones?n=" + barCount + "&l=" + areaLeft.toFixed(4) + "&r=" + areaRight.toFixed(4) + "&" + common,
-                function (t) {
-                    if (!t) return
-                    var c = JSON.parse(t).colors
-                    if (c.length === root.barCount) root.zoneColors = c
-                })
+            get("zones?" + span + "&" + common, applyColors)
+        } else if (colorMode === 2) {
+            get("contrast?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
+                + "&comp=" + (contrastComplementary ? 1 : 0) + "&" + common, applyColors)
         } else {
             get("palette?" + common, function (t) {
                 if (!t) return
@@ -106,7 +150,7 @@ PlasmoidItem {
     }
 
     function barColor(i) {
-        if (colorMode === 1 && zoneColors.length === barCount) {
+        if (colorMode !== 0 && zoneColors.length === barCount) {
             var z = zoneColors[i]
             return Qt.rgba(z[0] / 255, z[1] / 255, z[2] / 255, 1)
         }
@@ -200,6 +244,8 @@ PlasmoidItem {
                 var p = area.mapToItem(null, 0, 0)
                 root.areaLeft = Math.max(0, p.x / w)
                 root.areaRight = Math.min(1, (p.x + width) / w)
+                root.areaTop = Math.max(0, p.y / h)
+                root.areaBottom = Math.min(1, (p.y + height) / h)
                 root.screenAspect = w / h
             }
         }
@@ -216,6 +262,7 @@ PlasmoidItem {
             onTriggered: {
                 area.updateGeometry()
                 root.fetchColors()
+                root.syncRotation()
             }
         }
 

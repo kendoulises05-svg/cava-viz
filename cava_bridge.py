@@ -1,12 +1,14 @@
 """Puente entre cava y el widget Cava Viz.
 
 Endpoints (solo 127.0.0.1):
-  /                              último frame de cava ("12;45;80;...")
-  /pause, /resume                congela / reanuda cava (pantalla completa)
-  /bars?n=N                      cambia la cantidad de barras y reinicia cava
-  /palette?cid=&aspect=          colores vivos del wallpaper (JSON)
-  /zones?n=&l=&r=&aspect=&cid=   un color por barra según la zona del wallpaper (JSON)
-  /next                          cambia al siguiente wallpaper de la rotación
+  /                                   último frame de cava ("12;45;80;...")
+  /pause, /resume                     congela / reanuda cava (pantalla completa)
+  /bars?n=N                           cambia la cantidad de barras y reinicia cava
+  /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
+  /zones?n=&l=&r=&aspect=&cid=        un color por barra según la columna del wallpaper (JSON)
+  /contrast?n=&l=&r=&t=&b=&comp=&...  un color por barra, contrario a lo que hay detrás del widget (JSON)
+  /rotation?enabled=&dir=&interval=&order=   config de la rotación (la manda el widget)
+  /next                               cambia al siguiente wallpaper
 """
 import colorsys
 import json
@@ -34,11 +36,13 @@ STATE = os.path.expanduser("~/.local/state/cava-viz/rotation.json")
 IMG_EXT = (".jpg", ".jpeg", ".png", ".webp")
 PORT = 8765
 
+ORDER_RANDOM, ORDER_ALPHA, ORDER_NEWEST = 0, 1, 2
+
 latest = b"0"
 proc = None
 paused = False
-lock = threading.Lock()
-current_wallpaper = None          # lo fija la rotación; si es None se lee de la config de Plasma
+lock = threading.Lock()           # protege el proceso de cava
+state_lock = threading.Lock()     # protege el archivo de estado de la rotación
 rotate_now = threading.Event()    # /next lo activa para cambiar de inmediato
 
 
@@ -127,23 +131,19 @@ def find_containment(data, cid):
     return None
 
 
+def image_group(data, c):
+    return data.get(f"[Containments][{c}][Wallpaper][org.kde.image][General]", {})
+
+
+def configured_image(data, c):
+    """Imagen que Plasma tiene puesta en modo Imagen, o None si usa presentación u otro plugin."""
+    if data.get(f"[Containments][{c}]", {}).get("wallpaperplugin") != "org.kde.image":
+        return None  # en presentación Plasma no expone la imagen actual
+    value = image_group(data, c).get("Image", "")
+    return unquote(value.replace("file://", "", 1)) or None
+
+
 # ---------------- rotación de wallpapers ----------------
-
-def slideshow_images(data, c):
-    # Reutiliza la config de la presentación de Plasma: carpetas, desmarcadas e intervalo
-    g = data.get(f"[Containments][{c}][Wallpaper][org.kde.slideshow][General]", {})
-    dirs = [d for d in g.get("SlidePaths", "").split(",") if d]
-    unchecked = set(g.get("UncheckedSlides", "").split(","))
-    interval = int(g.get("SlideInterval", 600))
-    files = []
-    for d in dirs:
-        for folder, _, names in os.walk(d):
-            for n in names:
-                p = os.path.join(folder, n)
-                if n.lower().endswith(IMG_EXT) and p not in unchecked:
-                    files.append(p)
-    return sorted(files), interval
-
 
 def load_state():
     try:
@@ -155,40 +155,116 @@ def load_state():
 
 def save_state(state):
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
-    with open(STATE, "w") as f:
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(state, f)
+    os.replace(tmp, STATE)  # escritura atómica: un corte de luz no deja el archivo a medias
+
+
+def rotation_settings(state, data, c):
+    # Lo que mande el widget tiene prioridad; si falta algo, se usa la presentación de Plasma
+    g = data.get(f"[Containments][{c}][Wallpaper][org.kde.slideshow][General]", {})
+    s = state.get("settings", {})
+    dirs = [s["dir"]] if s.get("dir") else [d for d in g.get("SlidePaths", "").split(",") if d]
+    return {
+        "enabled": s.get("enabled", True),
+        "dirs": dirs,
+        "interval": s.get("interval") or int(g.get("SlideInterval", 600)),
+        "order": s.get("order", ORDER_RANDOM),
+        "unchecked": set(g.get("UncheckedSlides", "").split(",")),
+    }
+
+
+def list_images(dirs, unchecked):
+    files = []
+    for d in dirs:
+        for folder, _, names in os.walk(d):
+            for n in names:
+                p = os.path.join(folder, n)
+                if n.lower().endswith(IMG_EXT) and p not in unchecked:
+                    files.append(p)
+    return files
+
+
+def build_deck(files, order, current):
+    if order == ORDER_RANDOM:
+        deck = files[:]
+        random.shuffle(deck)
+        if len(deck) > 1 and deck[0] == current:  # no repetir la que ya está puesta
+            deck.append(deck.pop(0))
+        return deck
+    if order == ORDER_ALPHA:
+        deck = sorted(files, key=lambda p: os.path.basename(p).casefold())
+    else:  # ORDER_NEWEST
+        deck = sorted(files, key=os.path.getmtime, reverse=True)
+    # Empieza justo después de la imagen actual para continuar la secuencia
+    if current in deck:
+        i = deck.index(current) + 1
+        deck = deck[i:] + deck[:i]
+    return deck
+
+
+def rotation_step():
+    """Revisa si toca cambiar el wallpaper. Devuelve cuántos segundos esperar."""
+    state = load_state()
+    data = read_appletsrc()
+    c = find_containment(data, -1)
+    if c is None:
+        return 60
+    s = rotation_settings(state, data, c)
+    if not s["enabled"]:
+        return 60
+
+    current = configured_image(data, c)
+    # Si elegiste una imagen a mano en Plasma, se respeta y el intervalo vuelve a empezar
+    if current and state.get("applied") and current != state["applied"]:
+        state.update(applied=current, last=time.time())
+        save_state(state)
+        log(f"Imagen elegida a mano: {current}")
+
+    files = list_images(s["dirs"], s["unchecked"])
+    remaining = s["interval"] - (time.time() - state.get("last", 0))
+    if files and (remaining <= 0 or rotate_now.is_set()):
+        file_set = set(files)
+        deck = [f for f in state.get("deck", []) if f in file_set]  # quita las que ya no existen
+        if not deck or state.get("deck_order") != s["order"]:
+            deck = build_deck(files, s["order"], current)
+        path = deck.pop(0)
+        r = subprocess.run(["plasma-apply-wallpaperimage", path], capture_output=True, text=True)
+        if r.returncode == 0:
+            state.update(deck=deck, deck_order=s["order"], applied=path, last=time.time())
+            save_state(state)
+            log(f"Wallpaper: {path}")
+        else:
+            log(f"plasma-apply-wallpaperimage falló: {r.stderr.strip()}")
+        remaining = s["interval"]
+    return max(5, min(remaining, 60))  # revisa al menos cada minuto
 
 
 def rotation_loop():
-    global current_wallpaper
-    queue = []
     while True:
         wait = 60
         try:
-            data = read_appletsrc()
-            c = find_containment(data, -1)
-            files, interval = slideshow_images(data, c) if c else ([], 600)
-            # El último cambio se guarda en disco: el intervalo continúa después de reiniciar
-            remaining = interval - (time.time() - load_state().get("last", 0))
-            if files and (remaining <= 0 or rotate_now.is_set()):
-                queue = [f for f in queue if f in files]
-                if not queue:  # orden aleatorio sin repetir hasta recorrer toda la carpeta
-                    queue = files[:]
-                    random.shuffle(queue)
-                path = queue.pop()
-                r = subprocess.run(["plasma-apply-wallpaperimage", path], capture_output=True, text=True)
-                if r.returncode == 0:
-                    current_wallpaper = path
-                    save_state({"last": time.time()})
-                    log(f"Wallpaper: {path}")
-                else:
-                    log(f"plasma-apply-wallpaperimage falló: {r.stderr.strip()}")
-                remaining = interval
-            wait = max(5, min(remaining, 60))  # revisa al menos cada minuto
+            with state_lock:
+                wait = rotation_step()
         except Exception as e:
             log(f"Error en la rotación: {e}")
         rotate_now.clear()
         rotate_now.wait(timeout=wait)
+
+
+def update_rotation_settings(q):
+    new = {
+        "enabled": q.get("enabled", "1") == "1",
+        "dir": q.get("dir", ""),
+        "interval": max(60, int(q.get("interval", 900)) * 60),  # el widget manda minutos
+        "order": int(q.get("order", ORDER_RANDOM)),
+    }
+    with state_lock:
+        state = load_state()
+        if state.get("settings") != new:  # solo escribe si algo cambió
+            state["settings"] = new
+            save_state(state)
 
 
 # ---------------- colores del wallpaper ----------------
@@ -202,9 +278,8 @@ def wallpaper_info(cid):
     c = find_containment(data, cid)
     if c is None:
         return None, 2
-    g = data.get(f"[Containments][{c}][Wallpaper][org.kde.image][General]", {})
-    fill = int(g.get("FillMode", 2))  # 2 = recortar al centro (default de Plasma), 0 = estirar
-    path = current_wallpaper or unquote(g.get("Image", "").replace("file://", "", 1))
+    path = configured_image(data, c)
+    fill = int(image_group(data, c).get("FillMode", 2))  # 2 = recortar al centro, 0 = estirar
     if path and os.path.isdir(path):
         # Wallpaper tipo paquete (ej. /usr/share/wallpapers/Next): usa la imagen más grande
         imgs = os.path.join(path, "contents", "images")
@@ -248,6 +323,16 @@ def boost(rgb, min_v=0.6):
     return [round(r * 255), round(g * 255), round(b * 255)]
 
 
+def smooth(cols):
+    # Suavizado 1-2-1 para que el color no salte entre barras vecinas
+    n = len(cols)
+    out = []
+    for i in range(n):
+        a, b, c = cols[max(0, i - 1)], cols[i], cols[min(n - 1, i + 1)]
+        out.append([round((a[k] + 2 * b[k] + c[k]) / 4) for k in range(3)])
+    return out
+
+
 def palette(img, k=8):
     px = list(img.resize((160, 90)).getdata())
     # Solo los píxeles con color: así un detalle pequeño pero vivo no se pierde en el fondo oscuro
@@ -260,7 +345,6 @@ def palette(img, k=8):
     items = []
     for count, idx in q.getcolors():
         rgb = tuple(pal[idx * 3: idx * 3 + 3])
-        # Ordena por viveza y presencia; el brillo pesa un poco para imágenes apagadas
         h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
         items.append(((s * v + 0.1 * v) * count ** 0.5, rgb))
     items.sort(reverse=True)
@@ -297,13 +381,28 @@ def zones(img, n, left, right):
             t = (i - left_i) / (right_i - left_i)
             a, b = cols[left_i], cols[right_i]
             cols[i] = tuple(round(a[k] + (b[k] - a[k]) * t) for k in range(3))
+    return [boost(c) for c in smooth(cols)]
 
-    # Suavizado 1-2-1 para que el color no salte entre barras vecinas
-    out = []
+
+def contrast(img, n, left, right, top, bottom, complementary):
+    # Promedio de lo que hay DETRÁS del widget en cada columna, y el color contrario
+    w, h = img.size
+    x0, y0 = int(left * w), int(top * h)
+    x1, y1 = max(x0 + 1, int(right * w)), max(y0 + 1, int(bottom * h))
+    cells = img.crop((x0, y0, x1, y1)).resize((n, 1), Image.Resampling.BOX).load()
+    cols = []
     for i in range(n):
-        a, b, c = cols[max(0, i - 1)], cols[i], cols[min(n - 1, i + 1)]
-        out.append(boost([round((a[k] + 2 * b[k] + c[k]) / 4) for k in range(3)]))
-    return out
+        r, g, b = cells[i, 0]
+        lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255  # brillo percibido (0 negro, 1 blanco)
+        hh, s, _ = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        if complementary:
+            hh = (hh + 0.5) % 1.0  # tono opuesto en el círculo de color
+        # Fondo oscuro -> barra clara; fondo claro -> barra oscura (transición suave entre 0.4 y 0.6)
+        t = min(1.0, max(0.0, (lum - 0.4) / 0.2))
+        v = 0.95 * (1 - t) + 0.2 * t
+        rr, gg, bb = colorsys.hsv_to_rgb(hh, min(1.0, s * 1.15), v)
+        cols.append((round(rr * 255), round(gg * 255), round(bb * 255)))
+    return smooth(cols)
 
 
 # ---------------- HTTP ----------------
@@ -332,16 +431,25 @@ class Handler(BaseHTTPRequestHandler):
             set_bars(int(q.get("n", bars)))
         elif url.path == "/next":
             rotate_now.set()
-        elif url.path in ("/palette", "/zones"):
+        elif url.path == "/rotation":
+            try:
+                update_rotation_settings(q)
+            except Exception as e:
+                log(f"Config de rotación inválida: {e}")
+        elif url.path in ("/palette", "/zones", "/contrast"):
             colors = []
             try:
                 img = load_image(q.get("cid", "-1"), float(q.get("aspect", 0)))
                 if img is not None:
+                    n = int(q.get("n", bars))
+                    l, r = float(q.get("l", 0)), float(q.get("r", 1))
                     if url.path == "/palette":
                         colors = palette(img)
+                    elif url.path == "/zones":
+                        colors = zones(img, n, l, r)
                     else:
-                        colors = zones(img, int(q.get("n", bars)),
-                                       float(q.get("l", 0)), float(q.get("r", 1)))
+                        colors = contrast(img, n, l, r, float(q.get("t", 0)), float(q.get("b", 1)),
+                                          q.get("comp", "0") == "1")
             except Exception as e:
                 log(f"Error al leer colores del wallpaper: {e}")
             return self.send(json.dumps({"colors": colors}).encode(), "application/json")

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
+import QtQuick.Dialogs as QtDialogs
 import org.kde.kirigami as Kirigami
 import org.kde.kcmutils as KCM
 
@@ -14,9 +15,14 @@ KCM.SimpleKCM {
     property alias cfg_colorMode: colorMode.currentIndex
     property alias cfg_colorBlend: colorBlend.value
     property alias cfg_bassCenter: bassCenter.checked
+    property alias cfg_contrastComplementary: contrastComplementary.checked
     property alias cfg_showPeaks: showPeaks.checked
     property alias cfg_peakFall: peakFall.value
     property alias cfg_hideOnSilence: hideOnSilence.checked
+    property alias cfg_rotationEnabled: rotationEnabled.checked
+    property alias cfg_rotationDir: rotationDir.text
+    property alias cfg_rotationInterval: rotationInterval.value
+    property alias cfg_rotationOrder: rotationOrder.currentIndex
 
     Kirigami.FormLayout {
 
@@ -66,12 +72,12 @@ KCM.SimpleKCM {
         QQC2.ComboBox {
             id: colorMode
             Kirigami.FormData.label: "Modo:"
-            model: ["Accent + 2do color del wallpaper", "Por zona del wallpaper"]
+            model: ["Accent + 2do color del wallpaper", "Por zona del wallpaper", "Contraste (invertido)"]
         }
 
         RowLayout {
             Kirigami.FormData.label: "Mezcla hacia agudos:"
-            enabled: colorMode.currentIndex === 0   // en modo zona cada barra ya tiene su color
+            enabled: colorMode.currentIndex === 0
             QQC2.Slider { id: colorBlend; from: 0.0; to: 1.0; stepSize: 0.05 }
             QQC2.Label { text: Math.round(colorBlend.value * 100) + "%" }
         }
@@ -81,6 +87,68 @@ KCM.SimpleKCM {
             Kirigami.FormData.label: "Distribución:"
             text: "Graves al centro"
             enabled: colorMode.currentIndex === 0
+        }
+
+        QQC2.CheckBox {
+            id: contrastComplementary
+            Kirigami.FormData.label: "Contraste:"
+            text: "Tono complementario (si no, mismo tono)"
+            enabled: colorMode.currentIndex === 2
+        }
+
+        QQC2.Label {
+            text: "Los modos por zona y contraste necesitan que Cava Viz controle el wallpaper.\nCon la presentación de Plasma se usa el accent."
+            opacity: 0.7
+        }
+
+        // ---------- Wallpaper ----------
+        Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Wallpaper" }
+
+        QQC2.CheckBox { id: rotationEnabled; text: "Cava Viz cambia el wallpaper" }
+
+        RowLayout {
+            Kirigami.FormData.label: "Carpeta:"
+            enabled: rotationEnabled.checked
+            QQC2.TextField {
+                id: rotationDir
+                placeholderText: "Vacío = carpeta de la presentación de Plasma"
+                Layout.preferredWidth: Kirigami.Units.gridUnit * 16
+            }
+            QQC2.Button {
+                icon.name: "document-open-folder"
+                onClicked: folderDialog.open()
+            }
+        }
+
+        QtDialogs.FolderDialog {
+            id: folderDialog
+            // selectedFolder es una URL (file:///...); se guarda como ruta normal
+            onAccepted: rotationDir.text = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
+        }
+
+        RowLayout {
+            Kirigami.FormData.label: "Cambiar cada:"
+            enabled: rotationEnabled.checked
+            QQC2.SpinBox { id: rotationInterval; from: 1; to: 10080 }
+            QQC2.Label { text: "minutos" }
+        }
+
+        QQC2.ComboBox {
+            id: rotationOrder
+            Kirigami.FormData.label: "Orden:"
+            enabled: rotationEnabled.checked
+            model: ["Aleatorio", "Alfabético", "Más recientes primero"]
+        }
+
+        QQC2.Button {
+            text: "Siguiente wallpaper ahora"
+            icon.name: "go-next"
+            enabled: rotationEnabled.checked
+            onClicked: {
+                var x = new XMLHttpRequest()
+                x.open("GET", "http://127.0.0.1:8765/next")
+                x.send()
+            }
         }
 
         // ---------- Comportamiento ----------
