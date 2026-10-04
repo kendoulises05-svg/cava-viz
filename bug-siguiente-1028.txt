@@ -1,0 +1,39 @@
+===== FECHA =====
+Sun Oct  4 10:28:04 AM CST 2026
+===== LOG DEL PUENTE (30 min) =====
+Oct 04 09:58:10 kendo-hplaptop15dy2xxx systemd[1605]: Stopping cava-bridge.service - Puente de cava para el widget Cava Viz...
+Oct 04 09:58:10 kendo-hplaptop15dy2xxx systemd[1605]: Stopped cava-bridge.service - Puente de cava para el widget Cava Viz.
+Oct 04 09:58:10 kendo-hplaptop15dy2xxx systemd[1605]: cava-bridge.service: Consumed 35.632s CPU time over 8min 49.831s wall clock time, 117.6M memory peak.
+Oct 04 09:58:10 kendo-hplaptop15dy2xxx systemd[1605]: Started cava-bridge.service - Puente de cava para el widget Cava Viz.
+Oct 04 10:00:47 kendo-hplaptop15dy2xxx python3[116958]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/ps3(5).jpg
+Oct 04 10:21:14 kendo-hplaptop15dy2xxx systemd[1605]: Stopping cava-bridge.service - Puente de cava para el widget Cava Viz...
+Oct 04 10:21:14 kendo-hplaptop15dy2xxx systemd[1605]: Stopped cava-bridge.service - Puente de cava para el widget Cava Viz.
+Oct 04 10:21:14 kendo-hplaptop15dy2xxx systemd[1605]: cava-bridge.service: Consumed 1min 31.148s CPU time over 23min 3.717s wall clock time, 54.7M memory peak.
+Oct 04 10:21:14 kendo-hplaptop15dy2xxx systemd[1605]: Started cava-bridge.service - Puente de cava para el widget Cava Viz.
+Oct 04 10:22:24 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/pinteres aui_1920x1080.png
+Oct 04 10:22:40 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/descarga_1920x1080.png
+Oct 04 10:22:54 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/traverler_1920x1080.png
+Oct 04 10:22:58 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/japan_1920x1080.png
+Oct 04 10:23:01 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/skull.jpg
+Oct 04 10:23:03 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/BATTLEFIELD 2042 - Toros Kose_1920x1080.png
+Oct 04 10:23:06 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/watchdogs_logo.jpg
+Oct 04 10:23:09 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/2023-03-25_17-47-44.jpg
+Oct 04 10:23:14 kendo-hplaptop15dy2xxx python3[205969]: Wallpaper: /home/kendo/Desktop/Wallpaper y otros/wallpapers/wallpaper killzone.jpeg
+Oct 04 10:24:07 kendo-hplaptop15dy2xxx python3[205969]: plasma-apply-wallpaperimage falló:
+Oct 04 10:24:10 kendo-hplaptop15dy2xxx python3[205969]: plasma-apply-wallpaperimage falló:
+Oct 04 10:24:16 kendo-hplaptop15dy2xxx python3[205969]: plasma-apply-wallpaperimage falló:
+Oct 04 10:24:27 kendo-hplaptop15dy2xxx python3[205969]: plasma-apply-wallpaperimage falló:
+Oct 04 10:24:36 kendo-hplaptop15dy2xxx python3[205969]: Imagen elegida a mano: /home/kendo/Desktop/Wallpaper y otros/wallpapers/SR_71.jpg
+Oct 04 10:24:36 kendo-hplaptop15dy2xxx python3[205969]: plasma-apply-wallpaperimage falló:
+Oct 04 10:24:52 kendo-hplaptop15dy2xxx python3[205969]: plasma-apply-wallpaperimage falló:
+===== ESTADO DE LA ROTACION =====
+settings : {'enabled': True, 'dir': '/home/kendo/Desktop/Wallpaper y otros/wallpapers', 'interval': 3600, 'order': 0}
+applied  : /home/kendo/Desktop/Wallpaper y otros/wallpapers/SR_71.jpg
+ultimo cambio hace 208 s
+baraja   : 105 imagenes pendientes
+===== CPU DEL PUENTE =====
+ 206483 kendo     20   0  239212  12400   9856 S   9.1   0.1   0:09.72 cava
+ 205969 kendo     20   0  495292  37944  14864 S   0.0   0.2   0:18.00 python3
+===== PRUEBA DE SIGUIENTE =====
+el puente respondio a /next
+Oct 04 10:28:05 kendo-hplaptop15dy2xxx python3[205969]: plasma-apply-wallpaperimage falló:

@@ -9,6 +9,8 @@ Endpoints (solo 127.0.0.1):
                                       swap=1 intercambia esos colores (JSON)
   /contrast?n=&l=&r=&t=&b=&swap=&...  mismo tono que lo que hay detrás, brillo invertido;
                                       swap=1 además intercambia esos colores (JSON)
+  /auto?n=&l=&r=&t=&b=&swap=&...      EXPERIMENTAL: color de su zona, ajustado hasta que se distinga
+                                      del fondo detrás del widget (contrast ratio WCAG >= 3:1) (JSON)
   /rotation?enabled=&dir=&seconds=&order=    config de la rotación (la manda el widget)
   /next                               cambia al siguiente wallpaper
 """
@@ -236,7 +238,7 @@ def rotation_step():
         deck = [f for f in state.get("deck", []) if f in file_set]  # quita las que ya no existen
         if not deck or state.get("deck_order") != s["order"]:
             deck = build_deck(files, s["order"], current)
-        path = deck.pop(0)
+        path = deck[0]  # solo sale de la baraja si Plasma lo acepta
         try:
             # timeout: si Plasma no responde, no se congela toda la rotación
             r = subprocess.run(["plasma-apply-wallpaperimage", path],
@@ -245,11 +247,18 @@ def rotation_step():
             log("plasma-apply-wallpaperimage tardó más de 15 s; se reintenta en el siguiente ciclo")
             return 30
         if r.returncode == 0:
+            deck.pop(0)
             state.update(deck=deck, deck_order=s["order"], applied=path, last=time.time())
             save_state(state)
             log(f"Wallpaper: {path}")
         else:
-            log(f"plasma-apply-wallpaperimage falló: {r.stderr.strip()}")
+            # El motivo puede salir por stdout o stderr: se registran ambos con el código
+            log(f"plasma-apply-wallpaperimage falló (código {r.returncode}) con {path}"
+                f" | stdout: {r.stdout.strip() or '-'} | stderr: {r.stderr.strip() or '-'}")
+            deck.append(deck.pop(0))  # la imagen pasa al final: no se pierde ni bloquea a las demás
+            state.update(deck=deck, deck_order=s["order"])
+            save_state(state)
+            return 10
         remaining = s["interval"]
     return max(5, min(remaining, 60))  # revisa al menos cada minuto
 
@@ -463,6 +472,72 @@ def swap_colors(cols, img):
     return smooth([max(pool, key=lambda p: color_distance(p, c)) for c in cols])
 
 
+# ---------------- modo automático (experimental) ----------------
+
+MIN_CONTRAST = 3.0  # WCAG 2.x pide 3:1 como mínimo para elementos gráficos
+
+
+def rel_luminance(rgb):
+    # Luminancia relativa de WCAG: corrige la curva gamma de sRGB antes de ponderar los canales
+    def lin(c):
+        c /= 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(a, b):
+    la, lb = rel_luminance(a), rel_luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def ensure_contrast(color, bg, target=MIN_CONTRAST):
+    """Oscurece o aclara el color, conservando el tono, hasta que se distinga del fondo."""
+    if contrast_ratio(color, bg) >= target:
+        return list(color)
+    h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in color))
+
+    def with_v(val):
+        r, g, b = colorsys.hsv_to_rgb(h, s, val)
+        return [round(r * 255), round(g * 255), round(b * 255)]
+
+    def search(make, lo, hi, want_low):
+        # Búsqueda binaria del cambio mínimo que alcanza el contraste
+        for _ in range(16):
+            mid = (lo + hi) / 2
+            ok = contrast_ratio(make(mid), bg) >= target
+            if ok == want_low:
+                lo = mid
+            else:
+                hi = mid
+        return make(lo if want_low else hi)
+
+    # 0.179 es la luminancia donde blanco y negro contrastan igual: arriba de eso conviene oscurecer
+    if rel_luminance(bg) > 0.179:
+        # Oscurecer: el v más alto (más parecido al original) que cumpla; en v=0 (negro) siempre cumple
+        return search(with_v, 0.0, v, want_low=True)
+    # Aclarar: primero subir v; si con v=1 no alcanza (ej. azul oscuro), mezclar hacia blanco
+    if contrast_ratio(with_v(1.0), bg) >= target:
+        return search(with_v, v, 1.0, want_low=False)
+    top = with_v(1.0)
+
+    def toward_white(t):
+        return [round(c + (255 - c) * t) for c in top]
+    return search(toward_white, 0.0, 1.0, want_low=False)
+
+
+def auto_colors(img, n, left, right, top, bottom, swap):
+    cols = zones(img, n, left, right)          # colores que combinan con la imagen
+    if swap:
+        cols = swap_colors(cols, img)
+    # Fondo real detrás de cada barra (solo el área del widget)
+    w, h = img.size
+    x0, y0 = int(left * w), int(top * h)
+    x1, y1 = max(x0 + 1, int(right * w)), max(y0 + 1, int(bottom * h))
+    bg = img.crop((x0, y0, x1, y1)).resize((n, 1), Image.Resampling.BOX).load()
+    return [ensure_contrast(cols[i], bg[i, 0]) for i in range(n)]
+
+
 # ---------------- HTTP ----------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -496,7 +571,7 @@ class Handler(BaseHTTPRequestHandler):
                 update_rotation_settings(q)
             except Exception as e:
                 log(f"Config de rotación inválida: {e}")
-        elif url.path in ("/palette", "/zones", "/contrast"):
+        elif url.path in ("/palette", "/zones", "/contrast", "/auto"):
             colors = []
             try:
                 img = load_image(q.get("cid", "-1"), float(q.get("aspect", 0)))
@@ -513,11 +588,13 @@ class Handler(BaseHTTPRequestHandler):
                             cols = zones(img, n, l, r)
                             return swap_colors(cols, img) if swap else cols
                         colors = cached(("zones", n, l, r, swap), compute)
+                    elif url.path == "/auto":
+                        colors = cached(("auto", n, l, r, t, b, swap),
+                                        lambda: auto_colors(img, n, l, r, t, b, swap))
                     else:
-                        def compute():
-                            cols = contrast_bright(img, n, l, r, t, b)
-                            return swap_colors(cols, img) if swap else cols
-                        colors = cached(("contrast", n, l, r, t, b, swap), compute)
+                        # En contraste no se intercambia: invertir deshace el contraste
+                        colors = cached(("contrast", n, l, r, t, b),
+                                        lambda: contrast_bright(img, n, l, r, t, b))
             except Exception as e:
                 log(f"Error al leer colores del wallpaper: {e}")
             return self.send(json.dumps({"colors": colors}).encode(), "application/json")
