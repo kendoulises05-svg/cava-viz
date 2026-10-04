@@ -1,0 +1,14 @@
+{
+  "KPlugin": {
+    "Id": "org.kendo.cavaviz",
+    "Name": "Cava Viz",
+    "Description": "Audio visualizer",
+    "Icon": "audio-volume-high",
+    "Authors": [{ "Name": "Kendo" }],
+    "Category": "Multimedia",
+    "Version": "0.1",
+    "License": "GPL-2.0+"
+  },
+  "KPackageStructure": "Plasma/Applet",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}
