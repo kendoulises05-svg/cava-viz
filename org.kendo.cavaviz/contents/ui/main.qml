@@ -8,35 +8,114 @@ import org.kde.taskmanager as TaskManager
 PlasmoidItem {
     id: root
 
-    // ---------- Valores fijos (no están en el panel) ----------
-    readonly property int barCount: 80          // debe coincidir con bars en raw.conf
+    // ---------- Valores fijos ----------
     readonly property int pollMs: 16            // ~60 fps
-    readonly property real barSpacing: 2
+    readonly property int colorsMs: 5000        // cada cuánto se revisan los colores del wallpaper
     readonly property int silenceFrames: 120    // ~2 s
     readonly property string bridgeUrl: "http://127.0.0.1:8765/"
 
     // ---------- Valores del panel de configuración (main.xml) ----------
-    readonly property real barFill: Plasmoid.configuration.barFill
+    readonly property int barWidth: Plasmoid.configuration.barWidth
+    readonly property int barGap: Plasmoid.configuration.barGap
     readonly property int orientation: Plasmoid.configuration.orientation   // 0 abajo, 1 espejo, 2 flotante
+    readonly property real mirrorLine: Plasmoid.configuration.mirrorLine
     readonly property real mirrorOpacity: Plasmoid.configuration.mirrorOpacity
-    readonly property color secondaryColor: Plasmoid.configuration.secondaryColor
+    readonly property int colorMode: Plasmoid.configuration.colorMode       // 0 accent+2do, 1 zona
     readonly property real colorBlend: Plasmoid.configuration.colorBlend
     readonly property bool bassCenter: Plasmoid.configuration.bassCenter
     readonly property bool showPeaks: Plasmoid.configuration.showPeaks
     readonly property real peakFall: Plasmoid.configuration.peakFall
     readonly property bool hideOnSilence: Plasmoid.configuration.hideOnSilence
 
-    // Color de graves: accent del tema
+    // ---------- Color ----------
     readonly property color baseColor: Kirigami.Theme.highlightColor
+    // Respaldo mientras llega el color del wallpaper (o si el puente no puede leerlo)
+    property color wallSecond: Qt.lighter(Kirigami.Theme.highlightColor, 1.6)
+    property var zoneColors: []                 // [[r,g,b], ...] uno por barra
 
-    property var levels: new Array(barCount).fill(0)
-    property var peaks: new Array(barCount).fill(0)
+    // ---------- Geometría (la actualiza fullRepresentation) ----------
+    property real areaWidth: 1200
+    property real areaLeft: 0                   // borde izquierdo del widget en la pantalla (0-1)
+    property real areaRight: 1                  // borde derecho del widget en la pantalla (0-1)
+    property real screenAspect: 16 / 9
+
+    // Cuántas barras caben con el grosor y hueco elegidos. Par, porque cava stereo reparte mitad y mitad.
+    readonly property int barCount: {
+        var n = Math.floor((areaWidth + barGap) / (barWidth + barGap))
+        n = Math.max(16, Math.min(300, n))
+        return n - (n % 2)
+    }
+
+    property var levels: []
+    property var peaks: []
     property int silentCount: 0
     property bool busy: false
     property bool fullscreenActive: false
 
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
     preferredRepresentation: fullRepresentation
+
+    // ---------- Comunicación con el puente ----------
+    function get(path, callback) {
+        var x = new XMLHttpRequest()
+        x.open("GET", bridgeUrl + path)
+        x.onreadystatechange = function () {
+            if (x.readyState !== 4) return
+            if (callback) callback(x.status === 200 ? x.responseText : null)
+        }
+        x.send()
+    }
+
+    // Al cambiar el ancho o el grosor, espera a que termine el ajuste antes de reiniciar cava
+    onBarCountChanged: barsDebounce.restart()
+    Timer {
+        id: barsDebounce
+        interval: 600
+        onTriggered: root.get("bars?n=" + root.barCount, function () { root.fetchColors() })
+    }
+
+    onColorModeChanged: fetchColors()
+
+    function fetchColors() {
+        var cid = Plasmoid.containment ? Plasmoid.containment.id : -1
+        var common = "cid=" + cid + "&aspect=" + screenAspect.toFixed(4)
+        if (colorMode === 1) {
+            get("zones?n=" + barCount + "&l=" + areaLeft.toFixed(4) + "&r=" + areaRight.toFixed(4) + "&" + common,
+                function (t) {
+                    if (!t) return
+                    var c = JSON.parse(t).colors
+                    if (c.length === root.barCount) root.zoneColors = c
+                })
+        } else {
+            get("palette?" + common, function (t) {
+                if (!t) return
+                var c = JSON.parse(t).colors
+                if (c.length === 0) return
+                // De los colores vivos del wallpaper, el más distinto al accent (que ya cubre los graves)
+                var best = c[0], bestD = -1
+                for (var i = 0; i < Math.min(c.length, 5); i++) {
+                    var dr = c[i][0] / 255 - root.baseColor.r
+                    var dg = c[i][1] / 255 - root.baseColor.g
+                    var db = c[i][2] / 255 - root.baseColor.b
+                    var d = dr * dr + dg * dg + db * db
+                    if (d > bestD) { bestD = d; best = c[i] }
+                }
+                root.wallSecond = Qt.rgba(best[0] / 255, best[1] / 255, best[2] / 255, 1)
+            })
+        }
+    }
+
+    function barColor(i) {
+        if (colorMode === 1 && zoneColors.length === barCount) {
+            var z = zoneColors[i]
+            return Qt.rgba(z[0] / 255, z[1] / 255, z[2] / 255, 1)
+        }
+        // t = 0 en graves (accent puro), t = 1 en agudos (mezclado con el 2do color)
+        var center = (barCount - 1) / 2
+        var t = Math.abs(i - center) / center
+        if (!bassCenter) t = 1 - t
+        return Qt.tint(baseColor, Qt.rgba(wallSecond.r, wallSecond.g, wallSecond.b, t * colorBlend))
+    }
 
     // ---------- Detección de pantalla completa ----------
     TaskManager.VirtualDesktopInfo { id: vdInfo }
@@ -67,33 +146,20 @@ PlasmoidItem {
         fullscreenActive = fs
     }
 
-    onFullscreenActiveChanged: {
-        var x = new XMLHttpRequest()
-        x.open("GET", bridgeUrl + (fullscreenActive ? "pause" : "resume"))
-        x.send()
-    }
+    onFullscreenActiveChanged: get(fullscreenActive ? "pause" : "resume", null)
 
-    // ---------- Color ----------
-    // t = 0 en graves (accent puro), t = 1 en agudos (mezclado con secondaryColor).
-    // Qt.tint usa el alpha del segundo color como cantidad de mezcla.
-    function barColor(i) {
-        var center = (barCount - 1) / 2
-        var t = Math.abs(i - center) / center
-        if (!bassCenter) t = 1 - t
-        return Qt.tint(baseColor, Qt.rgba(secondaryColor.r, secondaryColor.g, secondaryColor.b, t * colorBlend))
-    }
-
-    // ---------- Datos ----------
+    // ---------- Datos de audio ----------
     function applyFrame(text) {
         var parts = text.split(";")
         var lv = []
-        var pk = peaks.slice()
+        var pk = []
         var sum = 0
         for (var i = 0; i < barCount; i++) {
             var v = parseInt(parts[i]) || 0
             lv.push(v)
             sum += v
-            pk[i] = Math.max(v, pk[i] - peakFall)
+            // "|| 0": tras cambiar la cantidad de barras, peaks puede ser más corto
+            pk.push(Math.max(v, (peaks[i] || 0) - peakFall))
         }
         silentCount = (sum === 0) ? silentCount + 1 : 0
         levels = lv
@@ -107,14 +173,10 @@ PlasmoidItem {
         onTriggered: {
             if (root.busy) return
             root.busy = true
-            var x = new XMLHttpRequest()
-            x.open("GET", root.bridgeUrl)
-            x.onreadystatechange = function () {
-                if (x.readyState !== 4) return
+            root.get("", function (t) {
                 root.busy = false
-                root.applyFrame(x.status === 200 ? x.responseText : "")
-            }
-            x.send()
+                root.applyFrame(t || "")
+            })
         }
     }
 
@@ -129,49 +191,74 @@ PlasmoidItem {
         opacity: (root.hideOnSilence && root.silentCount > root.silenceFrames) ? 0 : 1
         Behavior on opacity { NumberAnimation { duration: 600 } }
 
-        readonly property real slotWidth:
-            Math.max(1, (width - root.barSpacing * (root.barCount - 1)) / root.barCount)
+        // Calcula qué parte de la pantalla ocupa el widget (para el modo por zona)
+        function updateGeometry() {
+            root.areaWidth = width
+            var w = area.Window.width
+            var h = area.Window.height
+            if (w > 0 && h > 0) {
+                var p = area.mapToItem(null, 0, 0)
+                root.areaLeft = Math.max(0, p.x / w)
+                root.areaRight = Math.min(1, (p.x + width) / w)
+                root.screenAspect = w / h
+            }
+        }
+
+        onWidthChanged: updateGeometry()
+        Component.onCompleted: updateGeometry()
+
+        // Revisa cada pocos segundos: detecta si moviste el widget o cambiaste el wallpaper
+        Timer {
+            interval: root.colorsMs
+            running: !root.fullscreenActive
+            repeat: true
+            triggeredOnStart: true
+            onTriggered: {
+                area.updateGeometry()
+                root.fetchColors()
+            }
+        }
+
+        readonly property real slotWidth: width / root.barCount
 
         Repeater {
             model: root.barCount
 
             Item {
                 id: slot
-                x: index * (area.slotWidth + root.barSpacing)
+                x: index * area.slotWidth
                 width: area.slotWidth
                 height: area.height
 
                 readonly property color c: root.barColor(index)
-                readonly property real lv: root.levels[index] / 100
-                readonly property real pk: root.peaks[index] / 100
-                readonly property real half: height / 2
-                readonly property real barW: width * root.barFill
+                readonly property real lv: (root.levels[index] || 0) / 100
+                readonly property real pk: (root.peaks[index] || 0) / 100
+                readonly property real barW: Math.min(root.barWidth, width)
+                // Espejo: altura de la línea. Arriba de ella van las barras, abajo el reflejo.
+                readonly property real line: height * root.mirrorLine
 
                 // Barra principal
-                // abajo: crece desde el borde inferior
-                // espejo: crece hacia arriba desde la línea central
-                // flotante: centrada, crece igual hacia arriba y abajo
                 Rectangle {
                     width: slot.barW
                     anchors.horizontalCenter: parent.horizontalCenter
                     radius: width / 2
                     color: slot.c
                     height: root.orientation === 1
-                            ? Math.max(1, slot.half * slot.lv)
+                            ? Math.max(1, slot.line * slot.lv)
                             : Math.max(2, slot.height * slot.lv)
                     y: root.orientation === 0 ? slot.height - height
-                     : root.orientation === 1 ? slot.half - height
+                     : root.orientation === 1 ? slot.line - height
                      : (slot.height - height) / 2
                 }
 
-                // Reflejo (solo espejo): misma altura, se desvanece hacia abajo
+                // Reflejo (solo espejo): usa el espacio bajo la línea y se desvanece
                 Rectangle {
                     visible: root.orientation === 1
                     width: slot.barW
                     anchors.horizontalCenter: parent.horizontalCenter
                     radius: width / 2
-                    y: slot.half + 1
-                    height: Math.max(1, slot.half * slot.lv)
+                    y: slot.line + 1
+                    height: Math.max(1, (slot.height - slot.line - 1) * slot.lv)
                     gradient: Gradient {
                         GradientStop { position: 0.0; color: Qt.rgba(slot.c.r, slot.c.g, slot.c.b, root.mirrorOpacity) }
                         GradientStop { position: 1.0; color: "transparent" }
@@ -188,7 +275,7 @@ PlasmoidItem {
                     color: slot.c
                     opacity: 0.85
                     y: root.orientation === 0 ? Math.max(0, slot.height - slot.height * slot.pk - 4)
-                     : root.orientation === 1 ? Math.max(0, slot.half - slot.half * slot.pk - 4)
+                     : root.orientation === 1 ? Math.max(0, slot.line - slot.line * slot.pk - 4)
                      : Math.max(0, (slot.height - slot.height * slot.pk) / 2 - 4)
                 }
 

@@ -3,15 +3,15 @@ import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import org.kde.kcmutils as KCM
-import org.kde.kquickcontrols as KQControls
 
 KCM.SimpleKCM {
-    // Cada cfg_<nombre> se enlaza con la entrada del mismo nombre en main.xml.
-    // Plasma lee y guarda estos valores al abrir y al pulsar Apply/OK.
-    property alias cfg_barFill: barFill.value
+    // Cada cfg_<nombre> se enlaza con la entrada del mismo nombre en main.xml
+    property alias cfg_barWidth: barWidth.value
+    property alias cfg_barGap: barGap.value
     property alias cfg_orientation: orientation.currentIndex
+    property alias cfg_mirrorLine: mirrorLine.value
     property alias cfg_mirrorOpacity: mirrorOpacity.value
-    property alias cfg_secondaryColor: secondaryColor.color
+    property alias cfg_colorMode: colorMode.currentIndex
     property alias cfg_colorBlend: colorBlend.value
     property alias cfg_bassCenter: bassCenter.checked
     property alias cfg_showPeaks: showPeaks.checked
@@ -24,9 +24,20 @@ KCM.SimpleKCM {
         Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Forma" }
 
         RowLayout {
-            Kirigami.FormData.label: "Grosor de barras:"
-            QQC2.Slider { id: barFill; from: 0.1; to: 1.0; stepSize: 0.05 }
-            QQC2.Label { text: Math.round(barFill.value * 100) + "%" }
+            Kirigami.FormData.label: "Grosor de barra:"
+            QQC2.SpinBox { id: barWidth; from: 1; to: 20 }
+            QQC2.Label { text: "px" }
+        }
+
+        RowLayout {
+            Kirigami.FormData.label: "Hueco entre barras:"
+            QQC2.SpinBox { id: barGap; from: 0; to: 10 }
+            QQC2.Label { text: "px" }
+        }
+
+        QQC2.Label {
+            text: "La cantidad de barras se ajusta sola al ancho del widget"
+            opacity: 0.7
         }
 
         QQC2.ComboBox {
@@ -36,8 +47,15 @@ KCM.SimpleKCM {
         }
 
         RowLayout {
+            Kirigami.FormData.label: "Línea del espejo:"
+            enabled: orientation.currentIndex === 1
+            QQC2.Slider { id: mirrorLine; from: 0.5; to: 0.95; stepSize: 0.05 }
+            QQC2.Label { text: Math.round(mirrorLine.value * 100) + "% desde arriba" }
+        }
+
+        RowLayout {
             Kirigami.FormData.label: "Opacidad del reflejo:"
-            enabled: orientation.currentIndex === 1   // solo aplica en modo espejo
+            enabled: orientation.currentIndex === 1
             QQC2.Slider { id: mirrorOpacity; from: 0.1; to: 1.0; stepSize: 0.05 }
             QQC2.Label { text: Math.round(mirrorOpacity.value * 100) + "%" }
         }
@@ -45,24 +63,25 @@ KCM.SimpleKCM {
         // ---------- Color ----------
         Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Color" }
 
-        QQC2.Label {
-            Kirigami.FormData.label: "Graves:"
-            text: "Accent del tema (sigue al wallpaper)"
-        }
-
-        KQControls.ColorButton {
-            id: secondaryColor
-            Kirigami.FormData.label: "Agudos:"
-            showAlphaChannel: false
+        QQC2.ComboBox {
+            id: colorMode
+            Kirigami.FormData.label: "Modo:"
+            model: ["Accent + 2do color del wallpaper", "Por zona del wallpaper"]
         }
 
         RowLayout {
             Kirigami.FormData.label: "Mezcla hacia agudos:"
+            enabled: colorMode.currentIndex === 0   // en modo zona cada barra ya tiene su color
             QQC2.Slider { id: colorBlend; from: 0.0; to: 1.0; stepSize: 0.05 }
             QQC2.Label { text: Math.round(colorBlend.value * 100) + "%" }
         }
 
-        QQC2.CheckBox { id: bassCenter; Kirigami.FormData.label: "Distribución:"; text: "Graves al centro" }
+        QQC2.CheckBox {
+            id: bassCenter
+            Kirigami.FormData.label: "Distribución:"
+            text: "Graves al centro"
+            enabled: colorMode.currentIndex === 0
+        }
 
         // ---------- Comportamiento ----------
         Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Comportamiento" }

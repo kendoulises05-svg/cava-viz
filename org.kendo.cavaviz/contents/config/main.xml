@@ -4,14 +4,16 @@
       xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
   <kcfgfile name=""/>
   <group name="General">
-    <!-- Fracción del espacio que ocupa cada barra (1 = sin hueco) -->
-    <entry name="barFill" type="Double"><default>0.45</default></entry>
+    <!-- Forma: grosor y hueco en px; la cantidad de barras se calcula sola -->
+    <entry name="barWidth" type="Int"><default>4</default></entry>
+    <entry name="barGap" type="Int"><default>3</default></entry>
     <!-- 0 = desde abajo, 1 = espejo, 2 = flotante -->
     <entry name="orientation" type="Int"><default>0</default></entry>
+    <!-- Espejo: posición de la línea (0.5 = centro, 0.95 = casi abajo) -->
+    <entry name="mirrorLine" type="Double"><default>0.8</default></entry>
     <entry name="mirrorOpacity" type="Double"><default>0.35</default></entry>
-    <!-- Color de los agudos (fase 2: vendrá del wallpaper) -->
-    <entry name="secondaryColor" type="Color"><default>#7b3fa0</default></entry>
-    <!-- 0 = todo color accent, 1 = agudos llegan al color secundario completo -->
+    <!-- 0 = accent + 2do color del wallpaper, 1 = por zona del wallpaper -->
+    <entry name="colorMode" type="Int"><default>0</default></entry>
     <entry name="colorBlend" type="Double"><default>0.85</default></entry>
     <entry name="bassCenter" type="Bool"><default>true</default></entry>
     <entry name="showPeaks" type="Bool"><default>true</default></entry>
