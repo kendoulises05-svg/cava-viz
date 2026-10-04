@@ -140,7 +140,7 @@ Reload only what changed:
 
 ## License
 
-Not defined yet.
+GPL-3.0-or-later. See [LICENSE](LICENSE).
 
 ## Author
 

@@ -140,7 +140,7 @@ Recarga solo lo que cambió:
 
 ## Licencia
 
-Sin definir todavía.
+GPL-3.0 o posterior. Ver [LICENSE](LICENSE).
 
 ## Autor
 
