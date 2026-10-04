@@ -383,32 +383,38 @@ def zones(img, n, left, right):
     w, h = img.size
     x0 = int(left * w)
     x1 = max(x0 + 1, int(right * w))
+    strip = img.crop((x0, 0, x1, h))
     # BOX promedia bloques: cada columna queda dividida en 48 celdas promedio
-    cells = img.crop((x0, 0, x1, h)).resize((n, 48), Image.Resampling.BOX).load()
+    cells = strip.resize((n, 48), Image.Resampling.BOX).load()
+    avg = strip.resize((n, 1), Image.Resampling.BOX).load()  # color promedio de cada columna
     cols = []
     for i in range(n):
         # El color más vivo de la columna, no el promedio (el fondo oscuro dominaría)
         best = max((cells[i, j] for j in range(48)), key=vividness)
         cols.append(best if vividness(best) > 0.15 else None)
 
-    # Columnas sin color vivo (fondo oscuro/gris): interpola entre las columnas vivas más cercanas
-    vivid = [i for i, c in enumerate(cols) if c is not None]
-    if not vivid:
-        pal = palette(img)
-        return [pal[0] if pal else [128, 128, 128]] * n
-    for i in range(n):
+    # Columnas sin color vivo, agrupadas en tramos seguidos:
+    #  - tramo corto entre dos colores vivos -> se interpola (une zonas vecinas)
+    #  - tramo largo o en el borde -> usa su propio color real (ej. fondo gris = barras grises)
+    max_gap = max(2, n // 8)
+    i = 0
+    while i < n:
         if cols[i] is not None:
+            i += 1
             continue
-        left_i = max((v for v in vivid if v < i), default=None)
-        right_i = min((v for v in vivid if v > i), default=None)
-        if left_i is None:
-            cols[i] = cols[right_i]
-        elif right_i is None:
-            cols[i] = cols[left_i]
-        else:
-            t = (i - left_i) / (right_i - left_i)
-            a, b = cols[left_i], cols[right_i]
-            cols[i] = tuple(round(a[k] + (b[k] - a[k]) * t) for k in range(3))
+        j = i
+        while j < n and cols[j] is None:
+            j += 1
+        left_c = cols[i - 1] if i > 0 else None
+        right_c = cols[j] if j < n else None
+        length = j - i
+        for k in range(i, j):
+            if left_c is not None and right_c is not None and length <= max_gap:
+                t = (k - i + 1) / (length + 1)
+                cols[k] = tuple(round(left_c[c] + (right_c[c] - left_c[c]) * t) for c in range(3))
+            else:
+                cols[k] = avg[k, 0]
+        i = j
     return [boost(c) for c in smooth(cols)]
 
 
@@ -426,7 +432,10 @@ def contrast_bright(img, n, left, right, top, bottom):
     for i in range(n):
         r, g, b = cells[i, 0]
         lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255  # brillo percibido (0 negro, 1 blanco)
-        hh, s, _ = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        hh, s, v0 = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        s *= min(1.0, v0 / 0.3)  # en fondos casi negros el tono es ruido: gris oscuro -> barras blancas, no crema
+        if s < 0.12:
+            s = 0.0  # fondo prácticamente gris: barras grises/blancas puras
         # Fondo oscuro -> barra clara; fondo claro -> barra oscura (transición suave entre 0.4 y 0.6)
         t = min(1.0, max(0.0, (lum - 0.4) / 0.2))
         v = 0.95 * (1 - t) + 0.2 * t
