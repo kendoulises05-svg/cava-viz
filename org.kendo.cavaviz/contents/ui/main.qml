@@ -10,7 +10,7 @@ PlasmoidItem {
 
     // ---------- Valores fijos ----------
     readonly property int pollMs: 16            // ~60 fps
-    readonly property int colorsMs: 5000        // cada cuánto se revisan los colores del wallpaper
+    readonly property int colorsMs: 2000        // cada cuánto se revisan los colores (el puente usa caché)
     readonly property int silenceFrames: 120    // ~2 s
     readonly property string bridgeUrl: "http://127.0.0.1:8765/"
 
@@ -26,7 +26,7 @@ PlasmoidItem {
     readonly property bool showPeaks: Plasmoid.configuration.showPeaks
     readonly property real peakFall: Plasmoid.configuration.peakFall
     readonly property bool hideOnSilence: Plasmoid.configuration.hideOnSilence
-    readonly property int contrastStyle: Plasmoid.configuration.contrastStyle   // 0 intercambio, 1 brillo
+    readonly property bool zoneSwap: Plasmoid.configuration.zoneSwap
     readonly property bool rotationEnabled: Plasmoid.configuration.rotationEnabled
     readonly property string rotationDir: Plasmoid.configuration.rotationDir
     readonly property int rotationInterval: Plasmoid.configuration.rotationInterval   // minutos
@@ -100,7 +100,7 @@ PlasmoidItem {
     }
 
     onColorModeChanged: fetchColors()
-    onContrastStyleChanged: fetchColors()
+    onZoneSwapChanged: fetchColors()
 
     // Envía la config de rotación al puente (él solo la guarda si cambió)
     function syncRotation() {
@@ -126,10 +126,10 @@ PlasmoidItem {
         var common = "cid=" + cid + "&aspect=" + screenAspect.toFixed(4)
         var span = "n=" + barCount + "&l=" + areaLeft.toFixed(4) + "&r=" + areaRight.toFixed(4)
         if (colorMode === 1) {
-            get("zones?" + span + "&" + common, applyColors)
+            get("zones?" + span + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
         } else if (colorMode === 2) {
             get("contrast?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
-                + "&style=" + (contrastStyle === 1 ? "bright" : "swap") + "&" + common, applyColors)
+                + "&" + common, applyColors)
         } else {
             get("palette?" + common, function (t) {
                 if (!t) return

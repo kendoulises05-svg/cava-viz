@@ -15,7 +15,7 @@ KCM.SimpleKCM {
     property alias cfg_colorMode: colorMode.currentIndex
     property alias cfg_colorBlend: colorBlend.value
     property alias cfg_bassCenter: bassCenter.checked
-    property alias cfg_contrastStyle: contrastStyle.currentIndex
+    property alias cfg_zoneSwap: zoneSwap.checked
     property alias cfg_showPeaks: showPeaks.checked
     property alias cfg_peakFall: peakFall.value
     property alias cfg_hideOnSilence: hideOnSilence.checked
@@ -72,7 +72,7 @@ KCM.SimpleKCM {
         QQC2.ComboBox {
             id: colorMode
             Kirigami.FormData.label: "Modo:"
-            model: ["Accent + 2do color del wallpaper", "Por zona del wallpaper", "Contraste (invertido)"]
+            model: ["Accent + 2do color del wallpaper", "Por zona del wallpaper", "Contraste (brillo invertido)"]
         }
 
         RowLayout {
@@ -89,11 +89,11 @@ KCM.SimpleKCM {
             enabled: colorMode.currentIndex === 0
         }
 
-        QQC2.ComboBox {
-            id: contrastStyle
-            Kirigami.FormData.label: "Estilo de contraste:"
-            enabled: colorMode.currentIndex === 2
-            model: ["Colores del wallpaper intercambiados", "Mismo tono, brillo invertido"]
+        QQC2.CheckBox {
+            id: zoneSwap
+            Kirigami.FormData.label: "Por zona:"
+            text: "Invertir colores (intercambiar entre zonas)"
+            enabled: colorMode.currentIndex === 1
         }
 
         QQC2.Label {

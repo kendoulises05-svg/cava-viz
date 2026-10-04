@@ -5,9 +5,9 @@ Endpoints (solo 127.0.0.1):
   /pause, /resume                     congela / reanuda cava (pantalla completa)
   /bars?n=N                           cambia la cantidad de barras y reinicia cava
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
-  /zones?n=&l=&r=&aspect=&cid=        un color por barra según la columna del wallpaper (JSON)
-  /contrast?n=&l=&r=&t=&b=&style=     contraste: swap = colores del wallpaper intercambiados,
-                                      bright = mismo tono con brillo invertido (JSON)
+  /zones?n=&l=&r=&swap=&aspect=&cid=  un color por barra según la columna del wallpaper;
+                                      swap=1 intercambia esos colores (JSON)
+  /contrast?n=&l=&r=&t=&b=&...        mismo tono que lo que hay detrás, brillo invertido (JSON)
   /rotation?enabled=&dir=&interval=&order=   config de la rotación (la manda el widget)
   /next                               cambia al siguiente wallpaper
 """
@@ -284,6 +284,16 @@ def update_rotation_settings(q):
 # ---------------- colores del wallpaper ----------------
 
 _cache = {"key": None, "img": None}
+_results = {}  # resultados ya calculados; se vacía solo cuando cambia la imagen
+
+
+def cached(params, compute):
+    key = (_cache["key"],) + params
+    if key not in _results:
+        if len(_results) > 64:
+            _results.clear()
+        _results[key] = compute()
+    return _results[key]
 
 
 def wallpaper_info(cid):
@@ -309,7 +319,7 @@ def load_image(cid, aspect):
     key = (path, os.path.getmtime(path), round(aspect, 3), fill)
     if _cache["key"] != key:  # solo se recarga si cambia el wallpaper, la pantalla o el modo
         img = Image.open(path).convert("RGB")
-        img.thumbnail((800, 800))
+        img.thumbnail((600, 600))
         if fill == 2 and aspect > 0:
             # Igual que Plasma en "Scaled and Cropped": recorte centrado a la proporción de la pantalla
             w, h = img.size
@@ -333,6 +343,9 @@ def vividness(rgb):
 def boost(rgb, min_v=0.6):
     # Conserva el tono pero aclara colores muy oscuros para que las barras se vean sobre el fondo
     h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
+    if v < min_v:
+        # En píxeles casi negros el tono es ruido: sin esto un café oscuro se vuelve rojo intenso
+        s *= min(1.0, v / 0.3)
     r, g, b = colorsys.hsv_to_rgb(h, s, max(v, min_v))
     return [round(r * 255), round(g * 255), round(b * 255)]
 
@@ -421,24 +434,24 @@ def contrast_bright(img, n, left, right, top, bottom):
     return smooth(cols)
 
 
-def contrast_swap(img, n, left, right, top, bottom):
-    # Colores del propio wallpaper, intercambiados: cada barra toma el color de la paleta
-    # que MÁS se diferencia del color de su zona (zorro naranja -> barras azules y al revés)
-    pal = []
-    for c in palette(img):
-        if all(color_distance(c, p) > 60 for p in pal):  # descarta tonos casi iguales
-            pal.append(c)
-        if len(pal) == 6:
-            break
-    vivid_pal = [p for p in pal if vividness(p) > 0.2]
-    if len(vivid_pal) >= 2:
-        pal = vivid_pal  # con color suficiente, se descartan grises para que el intercambio se note
-    if len(pal) < 2:
-        return contrast_bright(img, n, left, right, top, bottom)  # imagen de un solo color
-    out = []
-    for z in zones(img, n, left, right):
-        out.append(max(pal, key=lambda p: color_distance(p, z)))
-    return smooth(out)
+def zones_swap(img, n, left, right):
+    # Los mismos colores del modo por zona, intercambiados: cada barra toma el color
+    # de otra zona que MÁS se diferencia del suyo (zorro: naranja <-> azul)
+    z = zones(img, n, left, right)
+    pool = []
+    for c in z:
+        if all(color_distance(c, p) > 60 for p in pool):  # agrupa tonos casi iguales
+            pool.append(c)
+    if len(pool) < 2:
+        # Toda la franja es de un solo color: se completa con la paleta de la imagen
+        for c in palette(img):
+            if all(color_distance(c, p) > 60 for p in pool):
+                pool.append(c)
+            if len(pool) == 4:
+                break
+    if len(pool) < 2:
+        return z
+    return smooth([max(pool, key=lambda p: color_distance(p, c)) for c in z])
 
 
 # ---------------- HTTP ----------------
@@ -480,17 +493,18 @@ class Handler(BaseHTTPRequestHandler):
                 img = load_image(q.get("cid", "-1"), float(q.get("aspect", 0)))
                 if img is not None:
                     n = int(q.get("n", bars))
-                    l, r = float(q.get("l", 0)), float(q.get("r", 1))
+                    # Redondeo: mover el widget 1 px no debe invalidar el caché
+                    l, r = round(float(q.get("l", 0)), 3), round(float(q.get("r", 1)), 3)
+                    t, b = round(float(q.get("t", 0)), 3), round(float(q.get("b", 1)), 3)
+                    swap = q.get("swap", "0") == "1"
                     if url.path == "/palette":
-                        colors = palette(img)
+                        colors = cached(("palette",), lambda: palette(img))
                     elif url.path == "/zones":
-                        colors = zones(img, n, l, r)
+                        fn = zones_swap if swap else zones
+                        colors = cached(("zones", n, l, r, swap), lambda: fn(img, n, l, r))
                     else:
-                        t, b = float(q.get("t", 0)), float(q.get("b", 1))
-                        if q.get("style", "swap") == "bright":
-                            colors = contrast_bright(img, n, l, r, t, b)
-                        else:
-                            colors = contrast_swap(img, n, l, r, t, b)
+                        colors = cached(("contrast", n, l, r, t, b),
+                                        lambda: contrast_bright(img, n, l, r, t, b))
             except Exception as e:
                 log(f"Error al leer colores del wallpaper: {e}")
             return self.send(json.dumps({"colors": colors}).encode(), "application/json")
