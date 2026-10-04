@@ -19,6 +19,7 @@ import json
 import os
 import random
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -47,8 +48,8 @@ proc = None
 paused = False
 lock = threading.Lock()           # protege el proceso de cava
 state_lock = threading.Lock()     # protege el archivo de estado de la rotación
-rotate_now = threading.Event()    # /next lo activa para cambiar de inmediato
-last_next = 0.0                   # para ignorar clics repetidos muy seguidos
+rotate_now = threading.Event()    # /next lo activa; varios clics durante un cambio se juntan en uno
+QDBUS = shutil.which("qdbus6") or shutil.which("qdbus")
 APPLY_GRACE = 10                  # segundos que Plasma puede tardar en escribir la imagen en su config
 
 
@@ -210,6 +211,35 @@ def build_deck(files, order, current):
     return deck
 
 
+def apply_wallpaper(path):
+    """Pone el wallpaper en Plasma. Devuelve (ok, detalle)."""
+    r = subprocess.run(["plasma-apply-wallpaperimage", path],
+                       capture_output=True, text=True, timeout=15)
+    if r.returncode == 0:
+        return True, ""
+    detail = (f"código {r.returncode} | stdout: {r.stdout.strip() or '-'}"
+              f" | stderr: {r.stderr.strip() or '-'}")
+    if "'" not in path or not QDBUS:
+        return False, detail
+    # plasma-apply-wallpaperimage rechaza nombres con comilla simple porque arma su script
+    # con la ruta entre comillas simples. Aquí se envía el mismo script por D-Bus, y
+    # json.dumps convierte la ruta en un texto JavaScript válido aunque tenga comillas.
+    script = (
+        "var ds = desktops();"
+        "for (var i = 0; i < ds.length; i++) {"
+        " ds[i].wallpaperPlugin = 'org.kde.image';"
+        " ds[i].currentConfigGroup = ['Wallpaper', 'org.kde.image', 'General'];"
+        f" ds[i].writeConfig('Image', {json.dumps('file://' + path)});"
+        "}"
+    )
+    r2 = subprocess.run([QDBUS, "org.kde.plasmashell", "/PlasmaShell",
+                         "org.kde.PlasmaShell.evaluateScript", script],
+                        capture_output=True, text=True, timeout=15)
+    if r2.returncode == 0:
+        return True, "aplicado por D-Bus: el nombre tiene comilla simple"
+    return False, f"{detail} | D-Bus: {r2.stdout.strip() or r2.stderr.strip() or '-'}"
+
+
 def rotation_step():
     """Revisa si toca cambiar el wallpaper. Devuelve cuántos segundos esperar."""
     state = load_state()
@@ -240,21 +270,18 @@ def rotation_step():
             deck = build_deck(files, s["order"], current)
         path = deck[0]  # solo sale de la baraja si Plasma lo acepta
         try:
-            # timeout: si Plasma no responde, no se congela toda la rotación
-            r = subprocess.run(["plasma-apply-wallpaperimage", path],
-                               capture_output=True, text=True, timeout=15)
+            ok, detail = apply_wallpaper(path)
         except subprocess.TimeoutExpired:
-            log("plasma-apply-wallpaperimage tardó más de 15 s; se reintenta en el siguiente ciclo")
+            log("Plasma tardó más de 15 s en aplicar el wallpaper; se reintenta en el siguiente ciclo")
             return 30
-        if r.returncode == 0:
+        if ok:
             deck.pop(0)
             state.update(deck=deck, deck_order=s["order"], applied=path, last=time.time())
             save_state(state)
-            log(f"Wallpaper: {path}")
+            log(f"Wallpaper: {path}" + (f" ({detail})" if detail else ""))
         else:
             # El motivo puede salir por stdout o stderr: se registran ambos con el código
-            log(f"plasma-apply-wallpaperimage falló (código {r.returncode}) con {path}"
-                f" | stdout: {r.stdout.strip() or '-'} | stderr: {r.stderr.strip() or '-'}")
+            log(f"No se pudo aplicar {path} | {detail}")
             deck.append(deck.pop(0))  # la imagen pasa al final: no se pierde ni bloquea a las demás
             state.update(deck=deck, deck_order=s["order"])
             save_state(state)
@@ -550,7 +577,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        global paused, last_next
+        global paused
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
 
@@ -563,9 +590,9 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/bars":
             set_bars(int(q.get("n", bars)))
         elif url.path == "/next":
-            if time.time() - last_next > 2:  # ignora clics repetidos en menos de 2 s
-                last_next = time.time()
-                rotate_now.set()
+            # Sin filtro de tiempo: la rotación aplica un cambio a la vez, así que los clics
+            # que lleguen mientras Plasma aplica uno se juntan en un solo "siguiente"
+            rotate_now.set()
         elif url.path == "/rotation":
             try:
                 update_rotation_settings(q)
