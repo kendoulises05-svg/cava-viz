@@ -129,6 +129,10 @@ PlasmoidItem {
             get("zones?" + span + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
         } else if (colorMode === 2) {
             get("contrast?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
+                + "&" + common, applyColors)
+        } else if (colorMode === 3) {
+            // Experimental: color de su zona, ajustado para que se distinga del fondo detrás del widget
+            get("auto?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
                 + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
         } else {
             get("palette?" + common, function (t) {
