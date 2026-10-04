@@ -7,8 +7,9 @@ Endpoints (solo 127.0.0.1):
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
   /zones?n=&l=&r=&swap=&aspect=&cid=  un color por barra según la columna del wallpaper;
                                       swap=1 intercambia esos colores (JSON)
-  /contrast?n=&l=&r=&t=&b=&...        mismo tono que lo que hay detrás, brillo invertido (JSON)
-  /rotation?enabled=&dir=&interval=&order=   config de la rotación (la manda el widget)
+  /contrast?n=&l=&r=&t=&b=&swap=&...  mismo tono que lo que hay detrás, brillo invertido;
+                                      swap=1 además intercambia esos colores (JSON)
+  /rotation?enabled=&dir=&seconds=&order=    config de la rotación (la manda el widget)
   /next                               cambia al siguiente wallpaper
 """
 import colorsys
@@ -271,7 +272,7 @@ def update_rotation_settings(q):
     new = {
         "enabled": q.get("enabled", "1") == "1",
         "dir": q.get("dir", ""),
-        "interval": max(60, int(q.get("interval", 900)) * 60),  # el widget manda minutos
+        "interval": max(10, int(q.get("seconds", 54000))),  # segundos; mínimo 10 para no saturar Plasma
         "order": int(q.get("order", ORDER_RANDOM)),
     }
     with state_lock:
@@ -434,12 +435,11 @@ def contrast_bright(img, n, left, right, top, bottom):
     return smooth(cols)
 
 
-def zones_swap(img, n, left, right):
-    # Los mismos colores del modo por zona, intercambiados: cada barra toma el color
-    # de otra zona que MÁS se diferencia del suyo (zorro: naranja <-> azul)
-    z = zones(img, n, left, right)
+def swap_colors(cols, img):
+    # Intercambia colores entre zonas: cada barra toma, de los colores presentes,
+    # el que MÁS se diferencia del suyo (zorro: naranja <-> azul)
     pool = []
-    for c in z:
+    for c in cols:
         if all(color_distance(c, p) > 60 for p in pool):  # agrupa tonos casi iguales
             pool.append(c)
     if len(pool) < 2:
@@ -450,8 +450,8 @@ def zones_swap(img, n, left, right):
             if len(pool) == 4:
                 break
     if len(pool) < 2:
-        return z
-    return smooth([max(pool, key=lambda p: color_distance(p, c)) for c in z])
+        return cols
+    return smooth([max(pool, key=lambda p: color_distance(p, c)) for c in cols])
 
 
 # ---------------- HTTP ----------------
@@ -500,11 +500,15 @@ class Handler(BaseHTTPRequestHandler):
                     if url.path == "/palette":
                         colors = cached(("palette",), lambda: palette(img))
                     elif url.path == "/zones":
-                        fn = zones_swap if swap else zones
-                        colors = cached(("zones", n, l, r, swap), lambda: fn(img, n, l, r))
+                        def compute():
+                            cols = zones(img, n, l, r)
+                            return swap_colors(cols, img) if swap else cols
+                        colors = cached(("zones", n, l, r, swap), compute)
                     else:
-                        colors = cached(("contrast", n, l, r, t, b),
-                                        lambda: contrast_bright(img, n, l, r, t, b))
+                        def compute():
+                            cols = contrast_bright(img, n, l, r, t, b)
+                            return swap_colors(cols, img) if swap else cols
+                        colors = cached(("contrast", n, l, r, t, b, swap), compute)
             except Exception as e:
                 log(f"Error al leer colores del wallpaper: {e}")
             return self.send(json.dumps({"colors": colors}).encode(), "application/json")

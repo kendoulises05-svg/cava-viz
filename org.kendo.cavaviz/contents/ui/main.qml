@@ -29,7 +29,7 @@ PlasmoidItem {
     readonly property bool zoneSwap: Plasmoid.configuration.zoneSwap
     readonly property bool rotationEnabled: Plasmoid.configuration.rotationEnabled
     readonly property string rotationDir: Plasmoid.configuration.rotationDir
-    readonly property int rotationInterval: Plasmoid.configuration.rotationInterval   // minutos
+    readonly property int rotationIntervalSec: Plasmoid.configuration.rotationIntervalSec
     readonly property int rotationOrder: Plasmoid.configuration.rotationOrder
 
     // ---------- Color ----------
@@ -106,12 +106,12 @@ PlasmoidItem {
     function syncRotation() {
         get("rotation?enabled=" + (rotationEnabled ? 1 : 0)
             + "&dir=" + encodeURIComponent(rotationDir)
-            + "&interval=" + rotationInterval
+            + "&seconds=" + rotationIntervalSec
             + "&order=" + rotationOrder, null)
     }
     onRotationEnabledChanged: syncRotation()
     onRotationDirChanged: syncRotation()
-    onRotationIntervalChanged: syncRotation()
+    onRotationIntervalSecChanged: syncRotation()
     onRotationOrderChanged: syncRotation()
 
     function applyColors(t) {
@@ -129,7 +129,7 @@ PlasmoidItem {
             get("zones?" + span + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
         } else if (colorMode === 2) {
             get("contrast?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
-                + "&" + common, applyColors)
+                + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
         } else {
             get("palette?" + common, function (t) {
                 if (!t) return
