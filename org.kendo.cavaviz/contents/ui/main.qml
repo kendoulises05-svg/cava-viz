@@ -22,7 +22,10 @@ PlasmoidItem {
     readonly property real mirrorOpacity: Plasmoid.configuration.mirrorOpacity
     readonly property int colorMode: Plasmoid.configuration.colorMode       // 0 accent+2do, 1 zona
     readonly property real colorBlend: Plasmoid.configuration.colorBlend
-    readonly property bool bassCenter: Plasmoid.configuration.bassCenter
+    readonly property int audioChannels: Plasmoid.configuration.audioChannels   // 0 stereo, 1 mono
+    readonly property int bassLayout: Plasmoid.configuration.bassLayout         // 0 normal, 1 invertida
+    readonly property bool glowEnabled: Plasmoid.configuration.glowEnabled
+    readonly property real glowStrength: Plasmoid.configuration.glowStrength
     readonly property bool showPeaks: Plasmoid.configuration.showPeaks
     readonly property real peakFall: Plasmoid.configuration.peakFall
     readonly property bool hideOnSilence: Plasmoid.configuration.hideOnSilence
@@ -57,6 +60,8 @@ PlasmoidItem {
     property var peaks: []
     property int silentCount: 0
     property bool busy: false
+    property bool bridgePaused: false           // el puente congeló cava (pantalla bloqueada o completa)
+    property real bassEnergy: 0                 // 0-1, energía de los graves para el glow
     property bool fullscreenActive: false
 
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
@@ -93,10 +98,12 @@ PlasmoidItem {
 
     // Al cambiar el ancho o el grosor, espera a que termine el ajuste antes de reiniciar cava
     onBarCountChanged: barsDebounce.restart()
+    onAudioChannelsChanged: barsDebounce.restart()
     Timer {
         id: barsDebounce
         interval: 600
-        onTriggered: root.get("bars?n=" + root.barCount, function () { root.fetchColors() })
+        onTriggered: root.get("bars?n=" + root.barCount + "&ch=" + (root.audioChannels === 1 ? "mono" : "stereo"),
+                              function () { root.fetchColors() })
     }
 
     onColorModeChanged: fetchColors()
@@ -158,11 +165,31 @@ PlasmoidItem {
             var z = zoneColors[i]
             return Qt.rgba(z[0] / 255, z[1] / 255, z[2] / 255, 1)
         }
-        // t = 0 en graves (accent puro), t = 1 en agudos (mezclado con el 2do color)
-        var center = (barCount - 1) / 2
-        var t = Math.abs(i - center) / center
-        if (!bassCenter) t = 1 - t
+        // El gradiente sigue a los graves estén donde estén (centro, bordes o un lado)
+        var t = bassT(i)
         return Qt.tint(baseColor, Qt.rgba(wallSecond.r, wallSecond.g, wallSecond.b, t * colorBlend))
+    }
+
+    // ---------- Distribución de frecuencias ----------
+    // 0 = graves, 1 = agudos, según la posición de la barra en pantalla
+    function bassT(i) {
+        var t
+        if (audioChannels === 1) {
+            t = i / (barCount - 1)                    // mono: graves a la izquierda
+        } else {
+            var c = (barCount - 1) / 2
+            t = Math.abs(i - c) / c                   // stereo: graves al centro
+        }
+        return bassLayout === 1 ? 1 - t : t
+    }
+
+    // Qué dato de cava va en la barra i. cava entrega stereo con graves al centro y mono con
+    // graves a la izquierda; "invertida" voltea cada mitad (stereo) o todo (mono).
+    function srcIndex(i) {
+        if (bassLayout === 0) return i
+        if (audioChannels === 1) return barCount - 1 - i
+        var half = barCount / 2
+        return i < half ? half - 1 - i : barCount - 1 - (i - half)
     }
 
     // ---------- Detección de pantalla completa ----------
@@ -198,24 +225,30 @@ PlasmoidItem {
 
     // ---------- Datos de audio ----------
     function applyFrame(text) {
-        var parts = text.split(";")
+        bridgePaused = (text === "P")   // "P": cava en pausa, se consulta 1 vez por segundo
+        var parts = bridgePaused ? [] : text.split(";")
         var lv = []
         var pk = []
         var sum = 0
+        var bassSum = 0, bassN = 0
         for (var i = 0; i < barCount; i++) {
-            var v = parseInt(parts[i]) || 0
+            var v = parseInt(parts[srcIndex(i)]) || 0
             lv.push(v)
             sum += v
             // "|| 0": tras cambiar la cantidad de barras, peaks puede ser más corto
             pk.push(Math.max(v, (peaks[i] || 0) - peakFall))
+            if (bassT(i) < 0.15) { bassSum += v; bassN++ }   // el 15% más grave
         }
         silentCount = (sum === 0) ? silentCount + 1 : 0
         levels = lv
         peaks = pk
+        // Glow: sube de golpe con un golpe de bajo y cae despacio, así "pulsa"
+        var bass = bassN ? bassSum / bassN / 100 : 0
+        bassEnergy = bass > bassEnergy ? bass : bassEnergy * 0.9
     }
 
     Timer {
-        interval: root.pollMs
+        interval: root.bridgePaused ? 1000 : root.pollMs
         running: !root.fullscreenActive
         repeat: true
         onTriggered: {
@@ -301,6 +334,20 @@ PlasmoidItem {
                     y: root.orientation === 0 ? slot.height - height
                      : root.orientation === 1 ? slot.line - height
                      : (slot.height - height) / 2
+
+                    // Glow: halo del mismo color detrás de la barra (z: -1 lo dibuja debajo).
+                    // Un rectángulo semitransparente es mucho más barato que un blur real.
+                    Rectangle {
+                        visible: root.glowEnabled && opacity > 0.01
+                        z: -1
+                        anchors.centerIn: parent
+                        readonly property real spread: Math.max(2, slot.barW)
+                        width: parent.width + 2 * spread
+                        height: parent.height + 2 * spread
+                        radius: width / 2
+                        color: slot.c
+                        opacity: root.glowStrength * root.bassEnergy * 0.5
+                    }
                 }
 
                 // Reflejo (solo espejo): usa el espacio bajo la línea y se desvanece

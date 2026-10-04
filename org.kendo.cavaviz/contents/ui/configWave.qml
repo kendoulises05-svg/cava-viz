@@ -13,6 +13,10 @@ KCM.SimpleKCM {
     property alias cfg_showPeaks: showPeaks.checked
     property alias cfg_peakFall: peakFall.value
     property alias cfg_hideOnSilence: hideOnSilence.checked
+    property alias cfg_audioChannels: audioChannels.currentIndex
+    property alias cfg_bassLayout: bassLayout.currentIndex
+    property alias cfg_glowEnabled: glowEnabled.checked
+    property alias cfg_glowStrength: glowStrength.value
 
     Kirigami.FormLayout {
 
@@ -53,6 +57,45 @@ KCM.SimpleKCM {
             enabled: orientation.currentIndex === 1
             QQC2.Slider { id: mirrorOpacity; from: 0.1; to: 1.0; stepSize: 0.05 }
             QQC2.Label { text: Math.round(mirrorOpacity.value * 100) + "%" }
+        }
+
+        Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Audio" }
+
+        QQC2.ComboBox {
+            id: audioChannels
+            Kirigami.FormData.label: "Canales:"
+            model: ["Stereo", "Mono"]
+        }
+
+        QQC2.ComboBox {
+            id: bassLayout
+            Kirigami.FormData.label: "Distribución:"
+            // Modelo fijo: si cambiara con los canales, ComboBox podría reiniciar la selección
+            model: ["Normal", "Invertida"]
+        }
+
+        QQC2.Label {
+            // Explica dónde quedan los graves con la combinación elegida
+            text: "Graves: " + (audioChannels.currentIndex === 0
+                  ? (bassLayout.currentIndex === 0 ? "al centro" : "a los extremos")
+                  : (bassLayout.currentIndex === 0 ? "a la izquierda" : "a la derecha"))
+            opacity: 0.7
+        }
+
+        QQC2.Label {
+            text: "Cambiar los canales reinicia cava (corte de menos de un segundo)"
+            opacity: 0.7
+        }
+
+        Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Glow" }
+
+        QQC2.CheckBox { id: glowEnabled; text: "Glow que pulsa con los graves" }
+
+        RowLayout {
+            Kirigami.FormData.label: "Intensidad:"
+            enabled: glowEnabled.checked
+            QQC2.Slider { id: glowStrength; from: 0.1; to: 1.0; stepSize: 0.05 }
+            QQC2.Label { text: Math.round(glowStrength.value * 100) + "%" }
         }
 
         Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Comportamiento" }

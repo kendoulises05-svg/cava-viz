@@ -15,12 +15,18 @@
     <!-- 0 = accent + 2do color, 1 = por zona, 2 = contraste (brillo invertido), 3 = automático (experimental) -->
     <entry name="colorMode" type="Int"><default>0</default></entry>
     <entry name="colorBlend" type="Double"><default>0.85</default></entry>
-    <entry name="bassCenter" type="Bool"><default>true</default></entry>
     <!-- Por zona y automático: true = intercambia los colores entre zonas (zorro naranja -> barras azules) -->
     <entry name="zoneSwap" type="Bool"><default>false</default></entry>
     <entry name="showPeaks" type="Bool"><default>true</default></entry>
     <entry name="peakFall" type="Double"><default>0.8</default></entry>
     <entry name="hideOnSilence" type="Bool"><default>true</default></entry>
+    <!-- Audio: 0 = stereo, 1 = mono -->
+    <entry name="audioChannels" type="Int"><default>0</default></entry>
+    <!-- 0 = normal (stereo: graves al centro, mono: graves a la izquierda), 1 = invertida -->
+    <entry name="bassLayout" type="Int"><default>0</default></entry>
+    <!-- Glow que pulsa con los graves -->
+    <entry name="glowEnabled" type="Bool"><default>false</default></entry>
+    <entry name="glowStrength" type="Double"><default>0.6</default></entry>
     <!-- Rotación de wallpaper (la ejecuta el puente) -->
     <entry name="rotationEnabled" type="Bool"><default>true</default></entry>
     <!-- Vacío = carpeta de la presentación de Plasma -->

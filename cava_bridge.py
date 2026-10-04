@@ -3,7 +3,8 @@
 Endpoints (solo 127.0.0.1):
   /                                   último frame de cava ("12;45;80;...")
   /pause, /resume                     congela / reanuda cava (pantalla completa)
-  /bars?n=N                           cambia la cantidad de barras y reinicia cava
+  /bars?n=N&ch=stereo|mono            cambia barras y canales, y reinicia cava
+  (si cava está en pausa por pantalla completa o bloqueo, "/" responde "P")
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
   /zones?n=&l=&r=&swap=&aspect=&cid=  un color por barra según la columna del wallpaper;
                                       swap=1 intercambia esos colores (JSON)
@@ -45,7 +46,7 @@ ORDER_RANDOM, ORDER_ALPHA, ORDER_NEWEST = 0, 1, 2
 
 latest = b"0"
 proc = None
-paused = False
+pause_reasons = set()             # "fullscreen" y/o "lock": mientras haya alguna, cava está congelado
 lock = threading.Lock()           # protege el proceso de cava
 state_lock = threading.Lock()     # protege el archivo de estado de la rotación
 rotate_now = threading.Event()    # /next lo activa; varios clics durante un cambio se juntan en uno
@@ -62,15 +63,26 @@ def read_bars():
     return int(m.group(1)) if m else 80
 
 
+def read_channels():
+    m = re.search(r"(?m)^\s*channels\s*=\s*(\w+)", open(CONF).read())
+    return m.group(1) if m and m.group(1) in ("stereo", "mono") else "stereo"
+
+
 bars = read_bars()
+channels = read_channels()
 
 
 # ---------------- cava ----------------
 
 def write_runtime_conf():
-    # Copia raw.conf cambiando solo "bars". Tu raw.conf original no se modifica.
+    # Copia raw.conf cambiando solo "bars" y "channels". Tu raw.conf original no se modifica.
     text = open(CONF).read()
     text = re.sub(r"(?m)^\s*bars\s*=.*$", f"bars = {bars}", text)
+    if re.search(r"(?m)^\s*channels\s*=", text):
+        text = re.sub(r"(?m)^\s*channels\s*=.*$", f"channels = {channels}", text)
+    else:
+        # raw.conf sin la línea: se agrega justo debajo de [output]
+        text = re.sub(r"(?m)^\[output\]\s*$", f"[output]\nchannels = {channels}", text, count=1)
     with open(RUNTIME_CONF, "w") as f:
         f.write(text)
 
@@ -83,7 +95,7 @@ def cava_loop():
         p = subprocess.Popen(["cava", "-p", RUNTIME_CONF], stdout=subprocess.PIPE, text=True)
         with lock:
             proc = p
-            if paused:
+            if pause_reasons:  # cava relanzado durante una pausa: nace congelado
                 p.send_signal(signal.SIGSTOP)
         for line in p.stdout:
             latest = line.strip().encode()
@@ -97,15 +109,46 @@ def signal_cava(sig):
             proc.send_signal(sig)
 
 
-def set_bars(n):
-    global bars
+def set_audio(n, ch):
+    global bars, channels
     n = max(16, min(300, n))
     n -= n % 2  # en stereo cava reparte mitad y mitad
-    if n == bars:
+    ch = ch if ch in ("stereo", "mono") else channels
+    if n == bars and ch == channels:
         return
-    bars = n
+    bars, channels = n, ch
+    log(f"cava: {bars} barras, {channels}")
     signal_cava(signal.SIGCONT)  # un proceso congelado no procesa SIGTERM
-    signal_cava(signal.SIGTERM)  # cava_loop lo relanza con el nuevo número de barras
+    signal_cava(signal.SIGTERM)  # cava_loop lo relanza con la config nueva
+
+
+def update_pause():
+    # Una sola función decide: si queda alguna razón de pausa, cava se congela
+    signal_cava(signal.SIGSTOP if pause_reasons else signal.SIGCONT)
+
+
+def lock_loop():
+    # Pregunta a Plasma cada 2 s si la pantalla está bloqueada
+    was_locked = False
+    while True:
+        locked = False
+        if QDBUS:
+            try:
+                r = subprocess.run([QDBUS, "org.freedesktop.ScreenSaver", "/ScreenSaver",
+                                    "org.freedesktop.ScreenSaver.GetActive"],
+                                   capture_output=True, text=True, timeout=5)
+                locked = r.stdout.strip() == "true"
+            except Exception:
+                pass  # si D-Bus no responde, se asume desbloqueado (no congela el visualizer por error)
+        if locked != was_locked:
+            if locked:
+                pause_reasons.add("lock")
+            else:
+                pause_reasons.discard("lock")
+            update_pause()
+            log("Pantalla bloqueada: cava en pausa" if locked else "Pantalla desbloqueada: cava activo")
+            was_locked = locked
+        time.sleep(2)
 
 
 # ---------------- config de Plasma ----------------
@@ -577,18 +620,17 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        global paused
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
 
         if url.path == "/pause":
-            paused = True
-            signal_cava(signal.SIGSTOP)
+            pause_reasons.add("fullscreen")
+            update_pause()
         elif url.path == "/resume":
-            paused = False
-            signal_cava(signal.SIGCONT)
+            pause_reasons.discard("fullscreen")
+            update_pause()
         elif url.path == "/bars":
-            set_bars(int(q.get("n", bars)))
+            set_audio(int(q.get("n", bars)), q.get("ch", channels))
         elif url.path == "/next":
             # Sin filtro de tiempo: la rotación aplica un cambio a la vez, así que los clics
             # que lleguen mientras Plasma aplica uno se juntan en un solo "siguiente"
@@ -626,7 +668,8 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"Error al leer colores del wallpaper: {e}")
             return self.send(json.dumps({"colors": colors}).encode(), "application/json")
 
-        self.send(latest)
+        # "P" le avisa al widget que cava está en pausa, para que consulte menos seguido
+        self.send(b"P" if pause_reasons else latest)
 
     def log_message(self, *args):
         pass
@@ -634,4 +677,5 @@ class Handler(BaseHTTPRequestHandler):
 
 threading.Thread(target=cava_loop, daemon=True).start()
 threading.Thread(target=rotation_loop, daemon=True).start()
+threading.Thread(target=lock_loop, daemon=True).start()
 ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

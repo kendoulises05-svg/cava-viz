@@ -7,7 +7,6 @@ import org.kde.kcmutils as KCM
 KCM.SimpleKCM {
     property alias cfg_colorMode: colorMode.currentIndex
     property alias cfg_colorBlend: colorBlend.value
-    property alias cfg_bassCenter: bassCenter.checked
     property alias cfg_zoneSwap: zoneSwap.checked
 
     Kirigami.FormLayout {
@@ -27,11 +26,9 @@ KCM.SimpleKCM {
             QQC2.Label { text: Math.round(colorBlend.value * 100) + "%" }
         }
 
-        QQC2.CheckBox {
-            id: bassCenter
-            Kirigami.FormData.label: "Distribución:"
-            text: "Graves al centro"
-            enabled: colorMode.currentIndex === 0
+        QQC2.Label {
+            text: "El color fuerte sigue a los graves según la distribución elegida en Wave."
+            opacity: 0.7
         }
 
         Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Por zona y automático" }
