@@ -277,7 +277,8 @@ PlasmoidItem {
                 width: area.slotWidth
                 height: area.height
 
-                readonly property color c: root.barColor(index)
+                property color c: root.barColor(index)
+                Behavior on c { ColorAnimation { duration: 600 } }   // al cambiar wallpaper o modo, el color se desliza en vez de saltar
                 readonly property real lv: (root.levels[index] || 0) / 100
                 readonly property real pk: (root.peaks[index] || 0) / 100
                 readonly property real barW: Math.min(root.barWidth, width)
