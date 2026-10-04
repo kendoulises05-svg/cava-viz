@@ -6,7 +6,8 @@ Endpoints (solo 127.0.0.1):
   /bars?n=N                           cambia la cantidad de barras y reinicia cava
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
   /zones?n=&l=&r=&aspect=&cid=        un color por barra según la columna del wallpaper (JSON)
-  /contrast?n=&l=&r=&t=&b=&comp=&...  un color por barra, contrario a lo que hay detrás del widget (JSON)
+  /contrast?n=&l=&r=&t=&b=&style=     contraste: swap = colores del wallpaper intercambiados,
+                                      bright = mismo tono con brillo invertido (JSON)
   /rotation?enabled=&dir=&interval=&order=   config de la rotación (la manda el widget)
   /next                               cambia al siguiente wallpaper
 """
@@ -44,6 +45,8 @@ paused = False
 lock = threading.Lock()           # protege el proceso de cava
 state_lock = threading.Lock()     # protege el archivo de estado de la rotación
 rotate_now = threading.Event()    # /next lo activa para cambiar de inmediato
+last_next = 0.0                   # para ignorar clics repetidos muy seguidos
+APPLY_GRACE = 10                  # segundos que Plasma puede tardar en escribir la imagen en su config
 
 
 def log(msg):
@@ -217,7 +220,9 @@ def rotation_step():
 
     current = configured_image(data, c)
     # Si elegiste una imagen a mano en Plasma, se respeta y el intervalo vuelve a empezar
-    if current and state.get("applied") and current != state["applied"]:
+    # (se ignora justo después de que el puente cambió la imagen: Plasma tarda en escribir su config)
+    recent = time.time() - state.get("last", 0) < APPLY_GRACE
+    if current and state.get("applied") and current != state["applied"] and not recent:
         state.update(applied=current, last=time.time())
         save_state(state)
         log(f"Imagen elegida a mano: {current}")
@@ -225,12 +230,19 @@ def rotation_step():
     files = list_images(s["dirs"], s["unchecked"])
     remaining = s["interval"] - (time.time() - state.get("last", 0))
     if files and (remaining <= 0 or rotate_now.is_set()):
+        rotate_now.clear()
         file_set = set(files)
         deck = [f for f in state.get("deck", []) if f in file_set]  # quita las que ya no existen
         if not deck or state.get("deck_order") != s["order"]:
             deck = build_deck(files, s["order"], current)
         path = deck.pop(0)
-        r = subprocess.run(["plasma-apply-wallpaperimage", path], capture_output=True, text=True)
+        try:
+            # timeout: si Plasma no responde, no se congela toda la rotación
+            r = subprocess.run(["plasma-apply-wallpaperimage", path],
+                               capture_output=True, text=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            log("plasma-apply-wallpaperimage tardó más de 15 s; se reintenta en el siguiente ciclo")
+            return 30
         if r.returncode == 0:
             state.update(deck=deck, deck_order=s["order"], applied=path, last=time.time())
             save_state(state)
@@ -246,10 +258,12 @@ def rotation_loop():
         wait = 60
         try:
             with state_lock:
+                # rotation_step limpia el aviso antes de cambiar: un clic que llegue
+                # mientras Plasma aplica la imagen queda pendiente para la siguiente vuelta
                 wait = rotation_step()
         except Exception as e:
             log(f"Error en la rotación: {e}")
-        rotate_now.clear()
+            rotate_now.clear()
         rotate_now.wait(timeout=wait)
 
 
@@ -384,8 +398,12 @@ def zones(img, n, left, right):
     return [boost(c) for c in smooth(cols)]
 
 
-def contrast(img, n, left, right, top, bottom, complementary):
-    # Promedio de lo que hay DETRÁS del widget en cada columna, y el color contrario
+def color_distance(a, b):
+    return sum((a[k] - b[k]) ** 2 for k in range(3)) ** 0.5
+
+
+def contrast_bright(img, n, left, right, top, bottom):
+    # Mismo tono que lo que hay DETRÁS del widget, con el brillo invertido
     w, h = img.size
     x0, y0 = int(left * w), int(top * h)
     x1, y1 = max(x0 + 1, int(right * w)), max(y0 + 1, int(bottom * h))
@@ -395,14 +413,32 @@ def contrast(img, n, left, right, top, bottom, complementary):
         r, g, b = cells[i, 0]
         lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255  # brillo percibido (0 negro, 1 blanco)
         hh, s, _ = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-        if complementary:
-            hh = (hh + 0.5) % 1.0  # tono opuesto en el círculo de color
         # Fondo oscuro -> barra clara; fondo claro -> barra oscura (transición suave entre 0.4 y 0.6)
         t = min(1.0, max(0.0, (lum - 0.4) / 0.2))
         v = 0.95 * (1 - t) + 0.2 * t
         rr, gg, bb = colorsys.hsv_to_rgb(hh, min(1.0, s * 1.15), v)
         cols.append((round(rr * 255), round(gg * 255), round(bb * 255)))
     return smooth(cols)
+
+
+def contrast_swap(img, n, left, right, top, bottom):
+    # Colores del propio wallpaper, intercambiados: cada barra toma el color de la paleta
+    # que MÁS se diferencia del color de su zona (zorro naranja -> barras azules y al revés)
+    pal = []
+    for c in palette(img):
+        if all(color_distance(c, p) > 60 for p in pal):  # descarta tonos casi iguales
+            pal.append(c)
+        if len(pal) == 6:
+            break
+    vivid_pal = [p for p in pal if vividness(p) > 0.2]
+    if len(vivid_pal) >= 2:
+        pal = vivid_pal  # con color suficiente, se descartan grises para que el intercambio se note
+    if len(pal) < 2:
+        return contrast_bright(img, n, left, right, top, bottom)  # imagen de un solo color
+    out = []
+    for z in zones(img, n, left, right):
+        out.append(max(pal, key=lambda p: color_distance(p, z)))
+    return smooth(out)
 
 
 # ---------------- HTTP ----------------
@@ -417,7 +453,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        global paused
+        global paused, last_next
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
 
@@ -430,7 +466,9 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/bars":
             set_bars(int(q.get("n", bars)))
         elif url.path == "/next":
-            rotate_now.set()
+            if time.time() - last_next > 2:  # ignora clics repetidos en menos de 2 s
+                last_next = time.time()
+                rotate_now.set()
         elif url.path == "/rotation":
             try:
                 update_rotation_settings(q)
@@ -448,8 +486,11 @@ class Handler(BaseHTTPRequestHandler):
                     elif url.path == "/zones":
                         colors = zones(img, n, l, r)
                     else:
-                        colors = contrast(img, n, l, r, float(q.get("t", 0)), float(q.get("b", 1)),
-                                          q.get("comp", "0") == "1")
+                        t, b = float(q.get("t", 0)), float(q.get("b", 1))
+                        if q.get("style", "swap") == "bright":
+                            colors = contrast_bright(img, n, l, r, t, b)
+                        else:
+                            colors = contrast_swap(img, n, l, r, t, b)
             except Exception as e:
                 log(f"Error al leer colores del wallpaper: {e}")
             return self.send(json.dumps({"colors": colors}).encode(), "application/json")

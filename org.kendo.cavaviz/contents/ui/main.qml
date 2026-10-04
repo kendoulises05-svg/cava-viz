@@ -26,7 +26,7 @@ PlasmoidItem {
     readonly property bool showPeaks: Plasmoid.configuration.showPeaks
     readonly property real peakFall: Plasmoid.configuration.peakFall
     readonly property bool hideOnSilence: Plasmoid.configuration.hideOnSilence
-    readonly property bool contrastComplementary: Plasmoid.configuration.contrastComplementary
+    readonly property int contrastStyle: Plasmoid.configuration.contrastStyle   // 0 intercambio, 1 brillo
     readonly property bool rotationEnabled: Plasmoid.configuration.rotationEnabled
     readonly property string rotationDir: Plasmoid.configuration.rotationDir
     readonly property int rotationInterval: Plasmoid.configuration.rotationInterval   // minutos
@@ -100,7 +100,7 @@ PlasmoidItem {
     }
 
     onColorModeChanged: fetchColors()
-    onContrastComplementaryChanged: fetchColors()
+    onContrastStyleChanged: fetchColors()
 
     // Envía la config de rotación al puente (él solo la guarda si cambió)
     function syncRotation() {
@@ -129,7 +129,7 @@ PlasmoidItem {
             get("zones?" + span + "&" + common, applyColors)
         } else if (colorMode === 2) {
             get("contrast?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
-                + "&comp=" + (contrastComplementary ? 1 : 0) + "&" + common, applyColors)
+                + "&style=" + (contrastStyle === 1 ? "bright" : "swap") + "&" + common, applyColors)
         } else {
             get("palette?" + common, function (t) {
                 if (!t) return

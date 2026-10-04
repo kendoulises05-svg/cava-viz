@@ -15,7 +15,7 @@ KCM.SimpleKCM {
     property alias cfg_colorMode: colorMode.currentIndex
     property alias cfg_colorBlend: colorBlend.value
     property alias cfg_bassCenter: bassCenter.checked
-    property alias cfg_contrastComplementary: contrastComplementary.checked
+    property alias cfg_contrastStyle: contrastStyle.currentIndex
     property alias cfg_showPeaks: showPeaks.checked
     property alias cfg_peakFall: peakFall.value
     property alias cfg_hideOnSilence: hideOnSilence.checked
@@ -89,11 +89,11 @@ KCM.SimpleKCM {
             enabled: colorMode.currentIndex === 0
         }
 
-        QQC2.CheckBox {
-            id: contrastComplementary
-            Kirigami.FormData.label: "Contraste:"
-            text: "Tono complementario (si no, mismo tono)"
+        QQC2.ComboBox {
+            id: contrastStyle
+            Kirigami.FormData.label: "Estilo de contraste:"
             enabled: colorMode.currentIndex === 2
+            model: ["Colores del wallpaper intercambiados", "Mismo tono, brillo invertido"]
         }
 
         QQC2.Label {
