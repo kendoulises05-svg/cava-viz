@@ -18,6 +18,7 @@ KCM.SimpleKCM {
     property alias cfg_glowEnabled: glowEnabled.checked
     property alias cfg_glowStrength: glowStrength.value
     property alias cfg_glowColorMode: glowColorMode.currentIndex
+    property alias cfg_pauseRule: pauseRule.currentIndex
     // fps se guarda como número (30/45/60), no como posición en la lista
     property int cfg_fps
 
@@ -126,6 +127,20 @@ KCM.SimpleKCM {
 
         QQC2.Label {
             text: "30 fps usa cerca de la mitad de CPU que 60 y a simple vista se nota poco.\nEl glow es la opción que más CPU consume."
+            opacity: 0.7
+        }
+
+        QQC2.ComboBox {
+            id: pauseRule
+            Kirigami.FormData.label: "Pausar cuando:"
+            model: ["Nunca", "Solo pantalla completa", "Pantalla completa o maximizada",
+                    "Una ventana tapa el widget"]
+        }
+
+        QQC2.Label {
+            text: pauseRule.currentIndex === 3
+                  ? "Incluye ventanas en tiling (Krohnkite): pausa si tapan el 90% del widget."
+                  : "En pausa cava se congela y el widget se oculta (~0% de CPU)."
             opacity: 0.7
         }
 

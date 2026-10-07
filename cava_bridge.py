@@ -2,9 +2,11 @@
 
 Endpoints (solo 127.0.0.1):
   /                                   último frame de cava ("12;45;80;...")
-  /pause, /resume                     congela / reanuda cava (pantalla completa)
+  /pause, /resume                     congela / reanuda cava (una ventana tapa el widget)
+  /disable, /enable, /toggle          apaga / enciende el visualizer a mano (persiste tras reiniciar)
+  /state                              "off" si está apagado a mano, "on" si no
   /bars?n=N&ch=stereo|mono&fps=F      cambia barras, canales y frames por segundo, y reinicia cava
-  (si cava está en pausa por pantalla completa o bloqueo, "/" responde "P")
+  (apagado a mano, "/" responde "D"; en pausa por ventana o bloqueo, responde "P")
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
   /zones?n=&l=&r=&swap=&aspect=&cid=  un color por barra según la columna del wallpaper;
                                       swap=1 intercambia esos colores (JSON)
@@ -39,6 +41,7 @@ CONF = os.path.expanduser("~/.config/cava/raw.conf")
 RUNTIME_CONF = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "cava-viz.conf")
 APPLETSRC = os.path.expanduser("~/.config/plasma-org.kde.plasma.desktop-appletsrc")
 STATE = os.path.expanduser("~/.local/state/cava-viz/rotation.json")
+DISABLED_FLAG = os.path.expanduser("~/.local/state/cava-viz/disabled")  # existe = apagado a mano
 IMG_EXT = (".jpg", ".jpeg", ".png", ".webp")
 PORT = 8765
 
@@ -46,7 +49,9 @@ ORDER_RANDOM, ORDER_ALPHA, ORDER_NEWEST = 0, 1, 2
 
 latest = b"0"
 proc = None
-pause_reasons = set()             # "fullscreen" y/o "lock": mientras haya alguna, cava está congelado
+pause_reasons = set()             # "covered", "lock" y/o "manual": mientras haya alguna, cava está congelado
+if os.path.exists(DISABLED_FLAG):
+    pause_reasons.add("manual")   # se apagó a mano antes de reiniciar: sigue apagado
 lock = threading.Lock()           # protege el proceso de cava
 state_lock = threading.Lock()     # protege el archivo de estado de la rotación
 rotate_now = threading.Event()    # /next lo activa; varios clics durante un cambio se juntan en uno
@@ -128,9 +133,24 @@ def set_audio(n, ch, f):
     signal_cava(signal.SIGTERM)  # cava_loop lo relanza con la config nueva
 
 
-def update_pause():
+def update_pause(why):
     # Una sola función decide: si queda alguna razón de pausa, cava se congela
     signal_cava(signal.SIGSTOP if pause_reasons else signal.SIGCONT)
+    log(f"{why} -> " + (f"cava en pausa {sorted(pause_reasons)}" if pause_reasons else "cava activo"))
+
+
+def set_manual(off):
+    if off == ("manual" in pause_reasons):
+        return
+    os.makedirs(os.path.dirname(DISABLED_FLAG), exist_ok=True)
+    if off:
+        pause_reasons.add("manual")
+        open(DISABLED_FLAG, "w").close()
+    else:
+        pause_reasons.discard("manual")
+        if os.path.exists(DISABLED_FLAG):
+            os.remove(DISABLED_FLAG)
+    update_pause("Apagado a mano" if off else "Encendido a mano")
 
 
 def lock_loop():
@@ -151,8 +171,7 @@ def lock_loop():
                 pause_reasons.add("lock")
             else:
                 pause_reasons.discard("lock")
-            update_pause()
-            log("Pantalla bloqueada: cava en pausa" if locked else "Pantalla desbloqueada: cava activo")
+            update_pause("Pantalla bloqueada" if locked else "Pantalla desbloqueada")
             was_locked = locked
         time.sleep(2)
 
@@ -676,11 +695,18 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
 
         if url.path == "/pause":
-            pause_reasons.add("fullscreen")
-            update_pause()
+            if "covered" not in pause_reasons:
+                pause_reasons.add("covered")
+                update_pause("Ventana tapa el widget")
         elif url.path == "/resume":
-            pause_reasons.discard("fullscreen")
-            update_pause()
+            if "covered" in pause_reasons:
+                pause_reasons.discard("covered")
+                update_pause("Widget visible")
+        elif url.path in ("/disable", "/enable", "/toggle"):
+            off = url.path == "/disable" or (url.path == "/toggle" and "manual" not in pause_reasons)
+            set_manual(off)
+        elif url.path == "/state":
+            return self.send(b"off" if "manual" in pause_reasons else b"on")
         elif url.path == "/bars":
             set_audio(int(q.get("n", bars)), q.get("ch", channels), int(q.get("fps", fps)))
         elif url.path == "/next":
@@ -720,7 +746,10 @@ class Handler(BaseHTTPRequestHandler):
                 log(f"Error al leer colores del wallpaper: {e}")
             return self.send(json.dumps({"colors": colors}).encode(), "application/json")
 
-        # "P" le avisa al widget que cava está en pausa, para que consulte menos seguido
+        # "D" (apagado a mano) y "P" (pausa) le avisan al widget que oculte las barras
+        # y consulte menos seguido
+        if "manual" in pause_reasons:
+            return self.send(b"D")
         self.send(b"P" if pause_reasons else latest)
 
     def log_message(self, *args):

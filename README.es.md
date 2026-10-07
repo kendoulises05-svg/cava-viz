@@ -34,7 +34,8 @@ Un widget visualizador de audio para el escritorio de KDE Plasma 6. Dibuja barra
 - Reutiliza la carpeta y las imágenes excluidas de la configuración de presentación de Plasma.
 
 **Consumo de recursos**
-- Pausa cava cuando hay una ventana en pantalla completa o la pantalla está bloqueada.
+- Pausa cava y oculta el widget cuando una ventana lo tapa (configurable: nunca, solo pantalla completa, pantalla completa o maximizada, o cualquier ventana que tape el widget, incluido tiling) o la pantalla está bloqueada.
+- Se puede apagar y encender a mano desde el clic derecho o con un atajo (`/toggle`); el estado se conserva tras reiniciar.
 - Los cálculos de color se guardan en caché y solo se recalculan cuando cambia el wallpaper, el modo o la posición del widget.
 
 ## Requisitos
@@ -70,7 +71,7 @@ Clic derecho sobre el widget > **Configure Cava Viz**:
 
 | Página | Opciones |
 |---|---|
-| Wave | Grosor y hueco, orientación, línea del espejo, canales y distribución de audio, glow, peaks, ocultar en silencio |
+| Wave | Grosor y hueco, orientación, línea del espejo, canales y distribución de audio, glow, fps, pausar cuando, peaks, ocultar en silencio |
 | Color | Modo de color, mezcla del accent, intercambio de colores entre zonas |
 | Wallpaper | Activar rotación, carpeta, orden, intervalo, botón de siguiente wallpaper |
 | Keyboard Shortcuts | Atajo para "siguiente wallpaper" |
@@ -101,17 +102,20 @@ Endpoints del puente, útiles para scripts:
 
 | Endpoint | Función |
 |---|---|
-| `/` | Último frame de cava (`P` mientras está en pausa) |
+| `/` | Último frame de cava (`P` en pausa, `D` apagado a mano) |
 | `/next` | Siguiente wallpaper |
-| `/pause`, `/resume` | Pausar o reanudar cava |
+| `/disable`, `/enable`, `/toggle` | Apagar, encender o alternar el visualizer (se conserva tras reiniciar) |
+| `/state` | `off` si está apagado a mano, `on` si no |
+| `/pause`, `/resume` | Pausar o reanudar cava (los usa el widget cuando una ventana lo tapa) |
 | `/bars?n=&ch=` | Cantidad de barras y `stereo` / `mono` |
 | `/palette`, `/zones`, `/contrast`, `/auto` | Colores del wallpaper (JSON) |
 | `/rotation?enabled=&dir=&seconds=&order=` | Configuración de la rotación |
 
-Ejemplo, para asignarlo a cualquier atajo de teclado:
+Para asignarlos a atajos de teclado: System Settings > Keyboard > Shortcuts > Add New > Command or Script, con uno de estos comandos:
 
 ```bash
-curl -s http://127.0.0.1:8765/next
+curl -s http://127.0.0.1:8765/toggle   # apagar / encender el visualizer
+curl -s http://127.0.0.1:8765/next     # siguiente wallpaper
 ```
 
 ## Solución de problemas

@@ -36,6 +36,7 @@ PlasmoidItem {
     readonly property string rotationDir: Plasmoid.configuration.rotationDir
     readonly property int rotationIntervalSec: Plasmoid.configuration.rotationIntervalSec
     readonly property int rotationOrder: Plasmoid.configuration.rotationOrder
+    readonly property int pauseRule: Plasmoid.configuration.pauseRule   // 0 nunca, 1 pantalla completa, 2 + maximizada, 3 ventana tapa el widget
 
     // ---------- Color ----------
     readonly property color baseColor: Kirigami.Theme.highlightColor
@@ -50,6 +51,7 @@ PlasmoidItem {
     property real areaTop: 0.75                 // borde superior del widget en la pantalla (0-1)
     property real areaBottom: 1                 // borde inferior del widget en la pantalla (0-1)
     property real screenAspect: 16 / 9
+    property rect areaRect: Qt.rect(0, 0, 0, 0)  // el widget en coordenadas de pantalla (para saber si una ventana lo tapa)
 
     // Cuántas barras caben con el grosor y hueco elegidos. Par, porque cava stereo reparte mitad y mitad.
     readonly property int barCount: {
@@ -65,17 +67,25 @@ PlasmoidItem {
     property string lastFrame: ""               // para no redibujar si el puente devuelve el mismo frame
     property int lastSum: -1                    // suma del último frame (0 = silencio)
     property bool peaksActive: false            // si queda algún peak por caer
-    property bool bridgePaused: false           // el puente congeló cava (pantalla bloqueada o completa)
+    property bool bridgePaused: false           // el puente congeló cava (pantalla bloqueada, ventana encima o apagado a mano)
+    property bool manualOff: false              // apagado a mano (/disable, /toggle o clic derecho)
     property real bassEnergy: 0                 // 0-1, energía de los graves para el glow
     property real bassPeak: 0.2                 // pico reciente de graves, para normalizar el glow
     property var glowColors: []                 // un color por barra: el que más contrasta con esa barra
-    property bool fullscreenActive: false
+    property bool coveredActive: false          // una ventana tapa el widget según pauseRule
+    property bool coverSent: false              // ya se avisó al puente al menos una vez
 
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
     preferredRepresentation: fullRepresentation
 
-    // Clic derecho sobre el widget > Siguiente wallpaper
+    // Clic derecho sobre el widget > Desactivar/Activar visualizer, Siguiente wallpaper
     Plasmoid.contextualActions: [
+        PlasmaCore.Action {
+            text: root.manualOff ? "Activar visualizer" : "Desactivar visualizer"
+            icon.name: root.manualOff ? "media-playback-start" : "media-playback-pause"
+            // El puente responde con el frame actual o "D": se aplica para cambiar el texto al instante
+            onTriggered: root.get(root.manualOff ? "enable" : "disable", function (t) { root.applyFrame(t || "") })
+        },
         PlasmaCore.Action {
             text: "Siguiente wallpaper"
             icon.name: "go-next"
@@ -249,7 +259,7 @@ PlasmoidItem {
         return i < half ? half - 1 - i : barCount - 1 - (i - half)
     }
 
-    // ---------- Detección de pantalla completa ----------
+    // ---------- Pausa cuando una ventana tapa el widget ----------
     TaskManager.VirtualDesktopInfo { id: vdInfo }
     TaskManager.ActivityInfo { id: actInfo }
 
@@ -263,22 +273,57 @@ PlasmoidItem {
         virtualDesktop: vdInfo.currentDesktop
         activity: actInfo.currentActivity
         screenGeometry: Plasmoid.containment ? Plasmoid.containment.screenGeometry : Qt.rect(0, 0, 0, 0)
-        onDataChanged: root.checkFullscreen()
-        onCountChanged: root.checkFullscreen()
+        // Mover o redimensionar una ventana dispara muchos cambios: se revisa una vez al terminar
+        onDataChanged: coverCheck.restart()
+        onCountChanged: coverCheck.restart()
+    }
+    onPauseRuleChanged: coverCheck.restart()
+    onAreaRectChanged: coverCheck.restart()
+    Component.onCompleted: coverCheck.restart()   // primer aviso al puente (por si quedó una pausa vieja)
+
+    Timer {
+        id: coverCheck
+        interval: 250
+        onTriggered: root.checkCovered()
     }
 
-    function checkFullscreen() {
-        var fs = false
-        for (var i = 0; i < tasks.count; i++) {
-            if (tasks.data(tasks.index(i, 0), TaskManager.AbstractTasksModel.IsFullScreen)) {
-                fs = true
-                break
+    function checkCovered() {
+        var covered = false
+        var wins = []   // ventanas para la regla 3
+        for (var i = 0; i < tasks.count && !covered && pauseRule > 0; i++) {
+            var idx = tasks.index(i, 0)
+            if (tasks.data(idx, TaskManager.AbstractTasksModel.IsMinimized)) continue
+            if (tasks.data(idx, TaskManager.AbstractTasksModel.IsFullScreen)) covered = true
+            else if (pauseRule >= 2 && tasks.data(idx, TaskManager.AbstractTasksModel.IsMaximized)) covered = true
+            else if (pauseRule === 3) wins.push(tasks.data(idx, TaskManager.AbstractTasksModel.Geometry))
+        }
+        if (!covered && pauseRule === 3) covered = coveredFraction(wins) >= 0.9
+        if (covered !== coveredActive || !coverSent) {
+            coveredActive = covered
+            coverSent = true
+            get(covered ? "pause" : "resume", null)
+        }
+    }
+
+    // Qué parte del widget tapan las ventanas (0-1). Se revisa una cuadrícula de puntos en vez de
+    // calcular la unión exacta de rectángulos: con tiling hay varias ventanas y huecos entre ellas,
+    // y el 90% deja pasar esos huecos.
+    function coveredFraction(wins) {
+        var a = areaRect
+        if (wins.length === 0 || a.width <= 0 || a.height <= 0) return 0
+        var cols = 24, rows = 4, hit = 0
+        for (var cx = 0; cx < cols; cx++) {
+            var x = a.x + (cx + 0.5) * a.width / cols
+            for (var cy = 0; cy < rows; cy++) {
+                var y = a.y + (cy + 0.5) * a.height / rows
+                for (var k = 0; k < wins.length; k++) {
+                    var g = wins[k]
+                    if (x >= g.x && x < g.x + g.width && y >= g.y && y < g.y + g.height) { hit++; break }
+                }
             }
         }
-        fullscreenActive = fs
+        return hit / (cols * rows)
     }
-
-    onFullscreenActiveChanged: get(fullscreenActive ? "pause" : "resume", null)
 
     // ---------- Datos de audio ----------
     function applyFrame(text) {
@@ -304,7 +349,8 @@ PlasmoidItem {
             return
         }
         lastFrame = text
-        bridgePaused = (text === "P")   // "P": cava en pausa, se consulta 1 vez por segundo
+        manualOff = (text === "D")
+        bridgePaused = (text === "P" || manualOff)   // en pausa o apagado: se consulta 1 vez por segundo
         var parts = bridgePaused ? [] : text.split(";")
         var lv = []
         var pk = []
@@ -334,7 +380,7 @@ PlasmoidItem {
 
     Timer {
         interval: root.bridgePaused ? 1000 : root.pollMs
-        running: !root.fullscreenActive
+        running: !root.coveredActive
         repeat: true
         onTriggered: {
             if (root.busy) return
@@ -354,7 +400,9 @@ PlasmoidItem {
         Layout.minimumWidth: 300
         Layout.minimumHeight: 80
 
-        opacity: (root.hideOnSilence && root.silentCount > root.silenceFrames) ? 0 : 1
+        // Oculto en pausa, apagado o tapado: así no quedan barras congeladas a la vista
+        opacity: (root.bridgePaused || root.coveredActive
+                  || (root.hideOnSilence && root.silentCount > root.silenceFrames)) ? 0 : 1
         Behavior on opacity { NumberAnimation { duration: 600 } }
 
         // Calcula qué parte de la pantalla ocupa el widget (para el modo por zona)
@@ -369,6 +417,9 @@ PlasmoidItem {
                 root.areaTop = Math.max(0, p.y / h)
                 root.areaBottom = Math.min(1, (p.y + height) / h)
                 root.screenAspect = w / h
+                // La vista del escritorio ocupa toda su pantalla: se suma la posición de esa pantalla
+                var sg = Plasmoid.containment ? Plasmoid.containment.screenGeometry : Qt.rect(0, 0, 0, 0)
+                root.areaRect = Qt.rect(sg.x + p.x, sg.y + p.y, width, height)
             }
         }
 
@@ -378,7 +429,7 @@ PlasmoidItem {
         // Revisa cada pocos segundos: detecta si moviste el widget o cambiaste el wallpaper
         Timer {
             interval: root.colorsMs
-            running: !root.fullscreenActive
+            running: !root.coveredActive && !root.manualOff
             repeat: true
             triggeredOnStart: true
             onTriggered: {

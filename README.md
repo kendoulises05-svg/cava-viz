@@ -34,7 +34,8 @@ An audio visualizer widget for the KDE Plasma 6 desktop. It draws thin, reactive
 - Reuses the folder and excluded images from the Plasma slideshow settings.
 
 **Resource usage**
-- Pauses cava when a window is fullscreen or the screen is locked.
+- Pauses cava and hides the widget when a window covers it (configurable: never, fullscreen only, fullscreen or maximized, or any window covering the widget, tiling included) or the screen is locked.
+- Can be turned off and on by hand from the right-click menu or a shortcut (`/toggle`); the state survives restarts.
 - Color calculations are cached and only recomputed when the wallpaper, mode or widget position changes.
 
 ## Requirements
@@ -70,7 +71,7 @@ Right-click the widget > **Configure Cava Viz**:
 
 | Page | Options |
 |---|---|
-| Wave | Bar width and gap, orientation, mirror line, audio channels and layout, glow, peaks, hide on silence |
+| Wave | Bar width and gap, orientation, mirror line, audio channels and layout, glow, fps, pause when, peaks, hide on silence |
 | Color | Color mode, accent blend, color swap between zones |
 | Wallpaper | Enable rotation, folder, order, interval, next wallpaper button |
 | Keyboard Shortcuts | Shortcut for "next wallpaper" |
@@ -101,17 +102,20 @@ Bridge endpoints, useful for scripting:
 
 | Endpoint | Purpose |
 |---|---|
-| `/` | Latest cava frame (`P` while paused) |
+| `/` | Latest cava frame (`P` while paused, `D` when turned off by hand) |
 | `/next` | Next wallpaper |
-| `/pause`, `/resume` | Pause or resume cava |
+| `/disable`, `/enable`, `/toggle` | Turn the visualizer off, on, or toggle it (survives restarts) |
+| `/state` | `off` if turned off by hand, `on` otherwise |
+| `/pause`, `/resume` | Pause or resume cava (used by the widget when a window covers it) |
 | `/bars?n=&ch=` | Bar count and `stereo` / `mono` |
 | `/palette`, `/zones`, `/contrast`, `/auto` | Wallpaper colors (JSON) |
 | `/rotation?enabled=&dir=&seconds=&order=` | Rotation settings |
 
-Example, bound to any keyboard shortcut:
+To bind them to keyboard shortcuts: System Settings > Keyboard > Shortcuts > Add New > Command or Script, with one of these commands:
 
 ```bash
-curl -s http://127.0.0.1:8765/next
+curl -s http://127.0.0.1:8765/toggle   # turn the visualizer off / on
+curl -s http://127.0.0.1:8765/next     # next wallpaper
 ```
 
 ## Troubleshooting

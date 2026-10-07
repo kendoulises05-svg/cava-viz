@@ -42,7 +42,7 @@ QML no puede leer un stream continuo ni archivos locales (`XMLHttpRequest` sobre
 
 ### Claves de configuración (main.xml)
 
-`barWidth barGap orientation mirrorLine mirrorOpacity colorMode colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder`
+`barWidth barGap orientation mirrorLine mirrorOpacity colorMode colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule`
 
 Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config con `property alias cfg_<clave>`.
 
@@ -50,8 +50,9 @@ Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config c
 
 | Endpoint | Función |
 |---|---|
-| `/` | Último frame (`12;45;...`), o `P` si cava está en pausa |
-| `/pause`, `/resume` | Agrega/quita la razón de pausa `"fullscreen"` |
+| `/` | Último frame (`12;45;...`), `P` si cava está en pausa, `D` si está apagado a mano |
+| `/pause`, `/resume` | Agrega/quita la razón de pausa `"covered"` (una ventana tapa el widget) |
+| `/disable`, `/enable`, `/toggle`, `/state` | Apagado manual (razón `"manual"`, persiste en `~/.local/state/cava-viz/disabled`) |
 | `/bars?n=&ch=&fps=` | Barras, `stereo`/`mono` y fps; reinicia cava |
 | `/next` | Siguiente wallpaper |
 | `/rotation?enabled=&dir=&seconds=&order=` | Config de rotación (estado en `~/.local/state/cava-viz/rotation.json`) |
@@ -59,9 +60,9 @@ Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config c
 
 ### Sistema de pausa actual (importante para las tareas)
 
-- En el puente, `pause_reasons` es un `set`. Razones actuales: `"fullscreen"` (la manda el widget) y `"lock"` (hilo `lock_loop` que consulta `org.freedesktop.ScreenSaver.GetActive` cada 2 s). `update_pause()` manda `SIGSTOP` si hay alguna razón y `SIGCONT` si no hay ninguna. Un cava relanzado durante una pausa nace congelado.
-- En el widget (`main.qml`): `TaskManager.TasksModel` con `filterByVirtualDesktop`, `filterByActivity`, `filterByScreen`, `filterHidden`; `checkFullscreen()` recorre las tareas buscando `AbstractTasksModel.IsFullScreen`. Al cambiar `fullscreenActive` llama `/pause` o `/resume` y detiene el `Timer` de polling.
-- Cuando el puente responde `P`, el widget baja el polling a 1 por segundo (`bridgePaused`).
+- En el puente, `pause_reasons` es un `set`. Razones actuales: `"covered"` (la manda el widget), `"manual"` (`/disable`, `/toggle`; persiste) y `"lock"` (hilo `lock_loop` que consulta `org.freedesktop.ScreenSaver.GetActive` cada 2 s). `update_pause()` manda `SIGSTOP` si hay alguna razón y `SIGCONT` si no hay ninguna. Un cava relanzado durante una pausa nace congelado.
+- En el widget (`main.qml`): `TaskManager.TasksModel` con `filterByVirtualDesktop`, `filterByActivity`, `filterByScreen`, `filterHidden`; `checkCovered()` (con debounce de 250 ms) aplica `pauseRule`: 0 nunca, 1 `IsFullScreen`, 2 también `IsMaximized`, 3 también si el `Geometry` de las ventanas tapa el 90% de `areaRect` (cuadrícula de puntos, cubre tiling). Al cambiar `coveredActive` llama `/pause` o `/resume`, detiene el polling y oculta las barras.
+- Cuando el puente responde `P` o `D`, el widget oculta las barras y baja el polling a 1 por segundo (`bridgePaused`, `manualOff`).
 - Medido el 2026-10-04: en pantalla completa cava pasa a estado `T` y los tres procesos caen a ~0% de CPU. **La pausa por pantalla completa funciona**; cualquier cambio no debe romperla.
 
 ### Acciones y atajo actuales
