@@ -12,6 +12,7 @@ PLASMOID_ID="org.kendo.cavaviz"
 SERVICE="cava-bridge.service"
 SERVICE_DIR="$HOME/.config/systemd/user"
 CAVA_CONF="$HOME/.config/cava/raw.conf"
+TERM_CONF="$HOME/.config/cava/terminal.conf"
 
 info() { echo -e "\e[36m[cava-viz]\e[0m $*"; }
 warn() { echo -e "\e[33m[cava-viz] AVISO:\e[0m $*"; }
@@ -53,6 +54,11 @@ else
     mkdir -p "$(dirname "$CAVA_CONF")"
     cp "$REPO_DIR/raw.conf" "$CAVA_CONF"
     info "raw.conf copiado a $CAVA_CONF"
+fi
+# cava para Konsole con los colores del wallpaper: cava -p ~/.config/cava/terminal.conf
+if [[ ! -f "$TERM_CONF" ]]; then
+    cp "$REPO_DIR/terminal.conf" "$TERM_CONF"
+    info "terminal.conf copiado a $TERM_CONF"
 fi
 
 # ---------- 3. Servicio del puente ----------

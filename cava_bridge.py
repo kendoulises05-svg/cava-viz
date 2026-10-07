@@ -5,6 +5,7 @@ Endpoints (solo 127.0.0.1):
   /pause, /resume                     congela / reanuda cava (una ventana tapa el widget)
   /disable, /enable, /toggle          apaga / enciende el visualizer a mano (persiste tras reiniciar)
   /state                              "off" si está apagado a mano, "on" si no
+  /terminal?pause=1|0                 pausar o no el widget mientras otro cava corre (ej. en Konsole)
   /bars?n=N&ch=stereo|mono&fps=F      cambia barras, canales y frames por segundo, y reinicia cava
   (apagado a mano, "/" responde "D"; en pausa por ventana o bloqueo, responde "P")
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
@@ -49,7 +50,8 @@ ORDER_RANDOM, ORDER_ALPHA, ORDER_NEWEST = 0, 1, 2
 
 latest = b"0"
 proc = None
-pause_reasons = set()             # "covered", "lock" y/o "manual": mientras haya alguna, cava está congelado
+pause_reasons = set()             # "covered", "lock", "manual" y/o "terminal": mientras haya alguna, cava está congelado
+terminal_pause = True             # el widget lo cambia con /terminal (opción del panel)
 if os.path.exists(DISABLED_FLAG):
     pause_reasons.add("manual")   # se apagó a mano antes de reiniciar: sigue apagado
 lock = threading.Lock()           # protege el proceso de cava
@@ -173,6 +175,45 @@ def lock_loop():
                 pause_reasons.discard("lock")
             update_pause("Pantalla bloqueada" if locked else "Pantalla desbloqueada")
             was_locked = locked
+        time.sleep(2)
+
+
+def other_cava_running():
+    # Algún cava que no sea el del puente (ej. el que abres en Konsole). Se lee /proc directo:
+    # son unos cientos de archivos pequeños, más barato que lanzar pgrep cada 2 s.
+    own = proc.pid if proc else None
+    for d in os.listdir("/proc"):
+        if not d.isdigit() or int(d) == own:
+            continue
+        try:
+            with open(f"/proc/{d}/comm") as f:
+                if f.read().strip() == "cava":
+                    return True
+        except OSError:
+            pass  # el proceso terminó mientras se recorría la lista
+    return False
+
+
+def terminal_loop():
+    # Revisa cada 2 s si hay otro cava abierto; si la opción está activa, pausa el del widget
+    was = False
+    seen = False
+    while True:
+        running = other_cava_running()
+        if running and not seen:
+            # Recién abierto: se pinta con el wallpaper actual. La espera de 1 s es porque
+            # SIGUSR2 antes de que cava instale su manejador lo cerraría.
+            time.sleep(1)
+            update_terminal_cava(load_state().get("applied"))
+        seen = running
+        now = terminal_pause and running
+        if now != was:
+            if now:
+                pause_reasons.add("terminal")
+            else:
+                pause_reasons.discard("terminal")
+            update_pause("cava abierto en terminal" if now else "cava de terminal cerrado")
+            was = now
         time.sleep(2)
 
 
@@ -525,8 +566,20 @@ def update_terminal_cava(path):
                 lines[i] = f"gradient_color_{n + 1} = '{shades[n]}'\n"
     with open(TERM_CONF, "w") as f:
         f.writelines(lines)
-    # Patrón específico a propósito (ver explicación)
-    subprocess.run(["pkill", "-USR2", "-f", r"cava -p .*terminal\.conf"])
+    # SIGUSR2 hace que cava recargue los colores. Solo a procesos que se llaman "cava" y usan
+    # terminal.conf: "pkill -f" también le pegaba a cualquier shell con ese texto en su comando
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/comm") as f:
+                if f.read().strip() != "cava":
+                    continue
+            with open(f"/proc/{d}/cmdline", "rb") as f:
+                if b"terminal.conf" in f.read():
+                    os.kill(int(d), signal.SIGUSR2)
+        except OSError:
+            pass  # el proceso terminó mientras se recorría la lista
     log(f"cava terminal: {shades}")
 
 def zones(img, n, left, right):
@@ -705,6 +758,9 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path in ("/disable", "/enable", "/toggle"):
             off = url.path == "/disable" or (url.path == "/toggle" and "manual" not in pause_reasons)
             set_manual(off)
+        elif url.path == "/terminal":
+            global terminal_pause
+            terminal_pause = q.get("pause", "1") == "1"
         elif url.path == "/state":
             return self.send(b"off" if "manual" in pause_reasons else b"on")
         elif url.path == "/bars":
@@ -759,4 +815,5 @@ class Handler(BaseHTTPRequestHandler):
 threading.Thread(target=cava_loop, daemon=True).start()
 threading.Thread(target=rotation_loop, daemon=True).start()
 threading.Thread(target=lock_loop, daemon=True).start()
+threading.Thread(target=terminal_loop, daemon=True).start()
 ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

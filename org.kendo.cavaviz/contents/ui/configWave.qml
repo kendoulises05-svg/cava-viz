@@ -19,6 +19,7 @@ KCM.SimpleKCM {
     property alias cfg_glowStrength: glowStrength.value
     property alias cfg_glowColorMode: glowColorMode.currentIndex
     property alias cfg_pauseRule: pauseRule.currentIndex
+    property alias cfg_terminalPause: terminalPause.checked
     // fps se guarda como número (30/45/60), no como posición en la lista
     property int cfg_fps
 
@@ -141,6 +142,16 @@ KCM.SimpleKCM {
             text: pauseRule.currentIndex === 3
                   ? "Incluye ventanas en tiling (Krohnkite): pausa si tapan el 90% del widget."
                   : "En pausa cava se congela y el widget se oculta (~0% de CPU)."
+            opacity: 0.7
+        }
+
+        QQC2.CheckBox {
+            id: terminalPause
+            text: "Pausar mientras cava corre en una terminal"
+        }
+
+        QQC2.Label {
+            text: "Si abres cava en Konsole, se ve solo ese. Cuenta aunque esa terminal\nesté en otro escritorio o minimizada."
             opacity: 0.7
         }
 

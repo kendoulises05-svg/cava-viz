@@ -36,6 +36,7 @@ PlasmoidItem {
     readonly property string rotationDir: Plasmoid.configuration.rotationDir
     readonly property int rotationIntervalSec: Plasmoid.configuration.rotationIntervalSec
     readonly property int rotationOrder: Plasmoid.configuration.rotationOrder
+    readonly property bool terminalPause: Plasmoid.configuration.terminalPause
     readonly property int pauseRule: Plasmoid.configuration.pauseRule   // 0 nunca, 1 pantalla completa, 2 + maximizada, 3 ventana tapa el widget
 
     // ---------- Color ----------
@@ -187,6 +188,10 @@ PlasmoidItem {
     onRotationDirChanged: syncRotation()
     onRotationIntervalSecChanged: syncRotation()
     onRotationOrderChanged: syncRotation()
+
+    // El puente pierde esta opción si se reinicia: se reenvía junto con la rotación
+    function syncTerminal() { get("terminal?pause=" + (terminalPause ? 1 : 0), null) }
+    onTerminalPauseChanged: syncTerminal()
 
     function applyColors(t) {
         if (!t) return
@@ -436,6 +441,10 @@ PlasmoidItem {
                 area.updateGeometry()
                 root.fetchColors()
                 root.syncRotation()
+                root.syncTerminal()
+                // Si el puente se reinició volvió a las barras/fps de raw.conf: se reenvían
+                // (el puente no reinicia cava si ya coinciden). No durante un ajuste de tamaño.
+                if (!barsDebounce.running) barsDebounce.restart()
             }
         }
 

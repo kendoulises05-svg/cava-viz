@@ -36,6 +36,8 @@ Un widget visualizador de audio para el escritorio de KDE Plasma 6. Dibuja barra
 **Consumo de recursos**
 - Pausa cava y oculta el widget cuando una ventana lo tapa (configurable: nunca, solo pantalla completa, pantalla completa o maximizada, o cualquier ventana que tape el widget, incluido tiling) o la pantalla está bloqueada.
 - Se puede apagar y encender a mano desde el clic derecho o con un atajo (`/toggle`); el estado se conserva tras reiniciar.
+- Se pausa mientras cava corre en una terminal (por ejemplo Konsole), para ver solo ese; es opcional.
+- cava en Konsole con los colores del wallpaper: `cava -p ~/.config/cava/terminal.conf` (`install.sh` copia `terminal.conf`; el puente actualiza sus colores al abrirlo y al cambiar de wallpaper).
 - Los cálculos de color se guardan en caché y solo se recalculan cuando cambia el wallpaper, el modo o la posición del widget.
 
 ## Requisitos
@@ -71,7 +73,7 @@ Clic derecho sobre el widget > **Configure Cava Viz**:
 
 | Página | Opciones |
 |---|---|
-| Wave | Grosor y hueco, orientación, línea del espejo, canales y distribución de audio, glow, fps, pausar cuando, peaks, ocultar en silencio |
+| Wave | Grosor y hueco, orientación, línea del espejo, canales y distribución de audio, glow, fps, pausar cuando, pausa con cava en terminal, peaks, ocultar en silencio |
 | Color | Modo de color, mezcla del accent, intercambio de colores entre zonas |
 | Wallpaper | Activar rotación, carpeta, orden, intervalo, botón de siguiente wallpaper |
 | Keyboard Shortcuts | Atajo para "siguiente wallpaper" |
@@ -106,6 +108,7 @@ Endpoints del puente, útiles para scripts:
 | `/next` | Siguiente wallpaper |
 | `/disable`, `/enable`, `/toggle` | Apagar, encender o alternar el visualizer (se conserva tras reiniciar) |
 | `/state` | `off` si está apagado a mano, `on` si no |
+| `/terminal?pause=1\|0` | Pausar o no mientras otro cava corre (lo manda el widget) |
 | `/pause`, `/resume` | Pausar o reanudar cava (los usa el widget cuando una ventana lo tapa) |
 | `/bars?n=&ch=` | Cantidad de barras y `stereo` / `mono` |
 | `/palette`, `/zones`, `/contrast`, `/auto` | Colores del wallpaper (JSON) |
@@ -117,6 +120,44 @@ Para asignarlos a atajos de teclado: System Settings > Keyboard > Shortcuts > Ad
 curl -s http://127.0.0.1:8765/toggle   # apagar / encender el visualizer
 curl -s http://127.0.0.1:8765/next     # siguiente wallpaper
 ```
+
+## Rendimiento
+
+Medido el 2026-10-07 con [`tools/bench.sh`](tools/bench.sh): promedio real de 10 s por escenario, con música sonando. Laptop HP, Kubuntu 26.04, Plasma 6.6.6 (Wayland). Configuración: 194 barras, 45 fps, glow activo, espejo, color automático.
+
+| Escenario | plasmashell | cava | puente | Total |
+|---|---|---|---|---|
+| Widget visible (activo) | 28.7% | 1.9% | 3.3% | 33.9% |
+| Pantalla completa | 8.5% | 0.0% | 0.0% | 8.5% |
+| Apagado manual | 8.5% | 0.0% | 0.0% | 8.5% |
+| Tiling parcial con "Pausar cuando: pantalla completa o maximizada" (no pausa) | 32.9% | 1.9% | 3.4% | 38.2% |
+
+Cómo leerlo:
+
+- **plasmashell también dibuja el panel y los otros widgets.** Con Cava Viz apagado se midió 9.4%, así que ese ~9% no es de Cava Viz. Lo propio de Cava Viz es ~20% activo y ~0% en pausa.
+- **En pausa, cava se congela** (estado `T`) y cava y el puente caen a 0%.
+- **Tiling:** con la opción "Pantalla completa o maximizada" el tiling no cuenta y el widget sigue dibujando detrás. Con "Una ventana tapa el widget" (la opción por defecto) también se pausa.
+
+Comparado con la medición anterior (muestra instantánea de `top`, solo plasmashell: glow a 60 fps ~31%, glow a 30 fps ~16%, sin glow a 30 fps ~13%, en pausa ~0%):
+
+- **Activo:** ~20% propio a 45 fps con glow y espejo, entre los valores anteriores de 30 y 60 fps. Lo esperable: la pausa por ventana y el apagado manual no agregaron costo medible.
+- **Mejora:** antes una ventana maximizada o en tiling no pausaba nada (~34% del total seguía corriendo). Ahora Cava Viz baja a ~0% en esos casos.
+- No es una comparación 1 a 1: antes se medía con `top` (una muestra) y con otra configuración. Desde ahora, `tools/bench.sh` permite repetir la misma medición antes y después de cada cambio.
+
+### Medir tú mismo
+
+```bash
+cd ~/cava-viz && tools/bench.sh
+```
+
+El script te guía por cada escenario: activo, pantalla completa, ventana que tapa el widget, cava en Konsole y apagado manual (este último lo hace solo). Otras formas de usarlo:
+
+```bash
+tools/bench.sh --now "glow 30 fps"     # mide solo lo que hay en pantalla ahora, sin preguntas
+SECS=20 tools/bench.sh                 # mediciones de 20 s en vez de 10
+```
+
+Los resultados se guardan en `~/.local/state/cava-viz/bench/`. Para comparar un cambio: mide, aplica el cambio, mide otra vez y compara la columna **total** y la fila **Apagado manual**.
 
 ## Solución de problemas
 

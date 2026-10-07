@@ -36,13 +36,15 @@ QML no puede leer un stream continuo ni archivos locales (`XMLHttpRequest` sobre
 | `org.kendo.cavaviz/contents/ui/configWallpaper.qml` | Página Wallpaper (rotación) |
 | `org.kendo.cavaviz/contents/config/main.xml` | Claves de configuración (kcfg) |
 | `org.kendo.cavaviz/contents/config/config.qml` | Registra las páginas Wave, Color, Wallpaper |
+| `terminal.conf` | Plantilla de cava para Konsole con gradiente; el puente reescribe sus colores |
+| `tools/bench.sh` | Medición de CPU por escenario |
 | `raw.conf` | Config base de cava; el puente escribe una copia en `$XDG_RUNTIME_DIR/cava-viz.conf` cambiando `bars`, `channels`, `framerate` |
 | `install.sh` | Instala/actualiza todo (`--uninstall` para quitar). Genera el servicio systemd con la ruta real del repo |
 | `README.md`, `README.es.md` | Documentación en inglés y español; incluye sección de rendimiento con mediciones |
 
 ### Claves de configuración (main.xml)
 
-`barWidth barGap orientation mirrorLine mirrorOpacity colorMode colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule`
+`barWidth barGap orientation mirrorLine mirrorOpacity colorMode colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule terminalPause`
 
 Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config con `property alias cfg_<clave>`.
 
@@ -53,6 +55,7 @@ Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config c
 | `/` | Último frame (`12;45;...`), `P` si cava está en pausa, `D` si está apagado a mano |
 | `/pause`, `/resume` | Agrega/quita la razón de pausa `"covered"` (una ventana tapa el widget) |
 | `/disable`, `/enable`, `/toggle`, `/state` | Apagado manual (razón `"manual"`, persiste en `~/.local/state/cava-viz/disabled`) |
+| `/terminal?pause=1\|0` | Opción `terminalPause` del widget; `terminal_loop` revisa `/proc` cada 2 s y agrega la razón `"terminal"` si corre otro cava |
 | `/bars?n=&ch=&fps=` | Barras, `stereo`/`mono` y fps; reinicia cava |
 | `/next` | Siguiente wallpaper |
 | `/rotation?enabled=&dir=&seconds=&order=` | Config de rotación (estado en `~/.local/state/cava-viz/rotation.json`) |
@@ -112,7 +115,11 @@ for i in $(seq 15); do ps -o stat= -C cava; sleep 1; done
 for i in $(seq 1 10); do top -b -n 2 -d 0.5 -p $(pgrep -x plasmashell) | awk '/^top -/{f++} f==2 && $1 ~ /^[0-9]+$/ {print "plasmashell cpu=" $9 "%"}'; done
 ```
 
-Referencia de rendimiento (README): glow 60 fps ~31%, glow 30 fps ~16%, sin glow 30 fps ~13%, pausado ~0%. Una mejora no debe empeorar estos números; medir antes y después.
+Medir con `tools/bench.sh` (guiado) o `tools/bench.sh --now "etiqueta"` (estado actual); resultados en `~/.local/state/cava-viz/bench/`. Referencia 2026-10-07 (194 barras, 45 fps, glow, espejo): activo 33.9% total (plasmashell 28.7%), pausado 8.5% (todo de plasmashell: panel y otros widgets miden ~9% con Cava Viz apagado). Una mejora no debe empeorar estos números; medir antes y después.
+
+cava en Konsole con colores del wallpaper: `cava -p ~/.config/cava/terminal.conf` (plantilla `terminal.conf` del repo, la copia `install.sh`). `update_terminal_cava()` reescribe `gradient_color_1..4` y manda `SIGUSR2` solo a procesos con comm `cava` y `terminal.conf` en el cmdline (**no usar `pkill -f`**: le pega a cualquier shell con ese texto en su comando). Un `cava` sin `-p` usa `~/.config/cava/config` y no recibe colores.
+
+**Lección: el puente pierde barras/canales/fps al reiniciarse** (vuelve a `raw.conf`). El widget los reenvía cada 2 s en el Timer de colores; sin eso, con menos barras de las esperadas solo se dibuja la parte izquierda.
 
 ## Lecciones aprendidas (errores que ya pasaron)
 

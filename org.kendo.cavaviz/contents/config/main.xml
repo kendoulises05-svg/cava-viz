@@ -25,6 +25,8 @@
     <!-- Pausar cuando: 0 = nunca, 1 = solo pantalla completa, 2 = pantalla completa o maximizada,
          3 = una ventana tapa el widget (incluye tiling) -->
     <entry name="pauseRule" type="Int"><default>3</default></entry>
+    <!-- Pausar el widget mientras otro cava corre (ej. en Konsole) -->
+    <entry name="terminalPause" type="Bool"><default>true</default></entry>
     <!-- Audio: 0 = stereo, 1 = mono -->
     <entry name="audioChannels" type="Int"><default>0</default></entry>
     <!-- 0 = normal (stereo: graves al centro, mono: graves a la izquierda), 1 = invertida -->

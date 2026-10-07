@@ -36,6 +36,8 @@ An audio visualizer widget for the KDE Plasma 6 desktop. It draws thin, reactive
 **Resource usage**
 - Pauses cava and hides the widget when a window covers it (configurable: never, fullscreen only, fullscreen or maximized, or any window covering the widget, tiling included) or the screen is locked.
 - Can be turned off and on by hand from the right-click menu or a shortcut (`/toggle`); the state survives restarts.
+- Pauses while cava runs in a terminal (for example Konsole), so only that one shows; optional.
+- cava in Konsole with the wallpaper colors: `cava -p ~/.config/cava/terminal.conf` (`install.sh` copies `terminal.conf`; the bridge updates its colors when it starts and when the wallpaper changes).
 - Color calculations are cached and only recomputed when the wallpaper, mode or widget position changes.
 
 ## Requirements
@@ -71,7 +73,7 @@ Right-click the widget > **Configure Cava Viz**:
 
 | Page | Options |
 |---|---|
-| Wave | Bar width and gap, orientation, mirror line, audio channels and layout, glow, fps, pause when, peaks, hide on silence |
+| Wave | Bar width and gap, orientation, mirror line, audio channels and layout, glow, fps, pause when, pause with cava in a terminal, peaks, hide on silence |
 | Color | Color mode, accent blend, color swap between zones |
 | Wallpaper | Enable rotation, folder, order, interval, next wallpaper button |
 | Keyboard Shortcuts | Shortcut for "next wallpaper" |
@@ -106,6 +108,7 @@ Bridge endpoints, useful for scripting:
 | `/next` | Next wallpaper |
 | `/disable`, `/enable`, `/toggle` | Turn the visualizer off, on, or toggle it (survives restarts) |
 | `/state` | `off` if turned off by hand, `on` otherwise |
+| `/terminal?pause=1\|0` | Pause or not while another cava runs (sent by the widget) |
 | `/pause`, `/resume` | Pause or resume cava (used by the widget when a window covers it) |
 | `/bars?n=&ch=` | Bar count and `stereo` / `mono` |
 | `/palette`, `/zones`, `/contrast`, `/auto` | Wallpaper colors (JSON) |
@@ -117,6 +120,44 @@ To bind them to keyboard shortcuts: System Settings > Keyboard > Shortcuts > Add
 curl -s http://127.0.0.1:8765/toggle   # turn the visualizer off / on
 curl -s http://127.0.0.1:8765/next     # next wallpaper
 ```
+
+## Performance
+
+Measured on 2026-10-07 with [`tools/bench.sh`](tools/bench.sh): real 10 s average per scenario, with music playing. HP laptop, Kubuntu 26.04, Plasma 6.6.6 (Wayland). Settings: 194 bars, 45 fps, glow on, mirror, automatic color.
+
+| Scenario | plasmashell | cava | bridge | Total |
+|---|---|---|---|---|
+| Widget visible (active) | 28.7% | 1.9% | 3.3% | 33.9% |
+| Fullscreen | 8.5% | 0.0% | 0.0% | 8.5% |
+| Turned off by hand | 8.5% | 0.0% | 0.0% | 8.5% |
+| Partial tiling with "Pause when: fullscreen or maximized" (no pause) | 32.9% | 1.9% | 3.4% | 38.2% |
+
+How to read it:
+
+- **plasmashell also draws the panel and the other widgets.** With Cava Viz off it measured 9.4%, so that ~9% is not Cava Viz. Cava Viz itself uses ~20% when active and ~0% when paused.
+- **When paused, cava is frozen** (state `T`) and cava and the bridge drop to 0%.
+- **Tiling:** with "Fullscreen or maximized", tiling does not count and the widget keeps drawing behind it. With "A window covers the widget" (the default) it pauses too.
+
+Compared with the previous measurement (single `top` sample, plasmashell only: glow at 60 fps ~31%, glow at 30 fps ~16%, no glow at 30 fps ~13%, paused ~0%):
+
+- **Active:** ~20% of its own at 45 fps with glow and mirror, between the previous 30 and 60 fps values. As expected: pausing on covered windows and the manual off switch added no measurable cost.
+- **Improvement:** before, a maximized or tiled window paused nothing (~34% total kept running). Now Cava Viz drops to ~0% in those cases.
+- Not a 1:1 comparison: the old numbers came from `top` (one sample) with other settings. From now on, `tools/bench.sh` repeats the same measurement before and after each change.
+
+### Measure it yourself
+
+```bash
+cd ~/cava-viz && tools/bench.sh
+```
+
+The script walks you through each scenario: active, fullscreen, a window covering the widget, cava in Konsole and turned off (the last one runs on its own). Other ways to use it:
+
+```bash
+tools/bench.sh --now "glow 30 fps"     # measure only what is on screen now, no prompts
+SECS=20 tools/bench.sh                 # 20 s measurements instead of 10
+```
+
+Results are saved in `~/.local/state/cava-viz/bench/`. To compare a change: measure, apply the change, measure again and compare the **total** column and the **Turned off by hand** row.
 
 ## Troubleshooting
 
