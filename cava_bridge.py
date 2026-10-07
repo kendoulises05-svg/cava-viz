@@ -308,6 +308,7 @@ def rotation_step():
         state.update(applied=current, last=time.time())
         save_state(state)
         log(f"Imagen elegida a mano: {current}")
+        update_terminal_cava(current)
 
     files = list_images(s["dirs"], s["unchecked"])
     remaining = s["interval"] - (time.time() - state.get("last", 0))
@@ -328,6 +329,7 @@ def rotation_step():
             state.update(deck=deck, deck_order=s["order"], applied=path, last=time.time())
             save_state(state)
             log(f"Wallpaper: {path}" + (f" ({detail})" if detail else ""))
+            update_terminal_cava(path)
         else:
             # El motivo puede salir por stdout o stderr: se registran ambos con el código
             log(f"No se pudo aplicar {path} | {detail}")
@@ -463,6 +465,50 @@ def palette(img, k=8):
     items.sort(reverse=True)
     return [boost(rgb) for _, rgb in items]
 
+TERM_CONF = os.path.expanduser("~/.config/cava/terminal.conf")
+
+
+def terminal_shades(rgb):
+    # 4 tonos del mismo color: base oscura -> punta clara
+    h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
+    out = []
+    for ss, vv in [(s, 0.18), (s, 0.45), (s, 0.80), (s * 0.45, 1.0)]:
+        r, g, b = colorsys.hsv_to_rgb(h, ss, vv)
+        out.append("#%02X%02X%02X" % (round(r * 255), round(g * 255), round(b * 255)))
+    return out
+
+
+def update_terminal_cava(path):
+    """Pinta el cava de Konsole con el color más vivo del wallpaper."""
+    if Image is None or not os.path.isfile(TERM_CONF):
+        return  # sin Pillow o sin terminal.conf: no hace nada
+    if path and os.path.isdir(path):
+        path = wallpaper_info(-1)[0]  # wallpaper tipo paquete
+    if not path or not os.path.isfile(path):
+        return
+    try:
+        # Se abre aparte para no pisar el _cache que usa el widget
+        img = Image.open(path).convert("RGB")
+        img.thumbnail((600, 600))
+        cols = palette(img)
+    except Exception as e:
+        log(f"cava terminal: no se pudo leer {path}: {e}")
+        return
+    if not cols:
+        return
+    shades = terminal_shades(cols[0])
+    with open(TERM_CONF) as f:
+        lines = f.readlines()
+    for i, line in enumerate(lines):
+        key = line.split("=")[0].strip()
+        for n in range(4):
+            if key == f"gradient_color_{n + 1}":
+                lines[i] = f"gradient_color_{n + 1} = '{shades[n]}'\n"
+    with open(TERM_CONF, "w") as f:
+        f.writelines(lines)
+    # Patrón específico a propósito (ver explicación)
+    subprocess.run(["pkill", "-USR2", "-f", r"cava -p .*terminal\.conf"])
+    log(f"cava terminal: {shades}")
 
 def zones(img, n, left, right):
     w, h = img.size
