@@ -183,7 +183,7 @@ Reload only what changed:
 - **Busy wallpapers:** with many small color areas, the zone mode averages them and may pick colors that do not look right.
 - **Automatic mode** is experimental. On very detailed backgrounds it may push colors close to black or white to reach the contrast target.
 - **Single screen:** tested with one monitor only.
-- **Video wallpaper:** colors follow the video with one frame every 4 s of the moment on screen, estimated from how much of the file plasmashell has read (may run 1-2 s ahead). While paused a fixed frame is used. The first pass of each video extracts frames with ffmpeg (~0.1 s CPU each, keyframe only); later passes use the cache.
+- **Video wallpaper:** colors follow the video. The first time a video is shown, the bridge prepares it in the background (one frame per second, in one low-priority pass; with VA-API hardware decoding ~2 s of CPU for a 97 s video, otherwise keyframes only). While the wallpaper is a video, the widget asks for colors every 0.5 s and the color transition lasts 0.25 s, so the delay is under 1 s. The moment is estimated from how much of the file plasmashell has read (may run 1-2 s ahead). While paused a fixed frame is used. Up to 30 prepared videos are kept.
 
 ## License
 

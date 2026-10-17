@@ -12,6 +12,8 @@ PlasmoidItem {
     readonly property int fps: Plasmoid.configuration.fps
     readonly property int pollMs: Math.round(1000 / fps)
     readonly property int colorsMs: 2000        // cada cuánto se revisan los colores (el puente usa caché)
+    readonly property int liveColorsMs: 500     // con fondo de video, los colores se piden así de seguido
+    property bool liveVideo: false              // el puente avisa si el fondo es un video ("live")
     readonly property int silenceFrames: fps * 2   // 2 segundos, sin importar los fps
     readonly property string bridgeUrl: "http://127.0.0.1:8765/"
 
@@ -195,7 +197,9 @@ PlasmoidItem {
 
     function applyColors(t) {
         if (!t) return
-        var c = JSON.parse(t).colors
+        var res = JSON.parse(t)
+        root.liveVideo = !!res.live
+        var c = res.colors
         // Lista vacía = el puente no sabe qué imagen hay (ej. presentación de Plasma): se usa el accent
         zoneColors = (c.length === barCount) ? c : []
     }
@@ -216,7 +220,9 @@ PlasmoidItem {
         } else {
             get("palette?" + common, function (t) {
                 if (!t) return
-                var c = JSON.parse(t).colors
+                var res = JSON.parse(t)
+                root.liveVideo = !!res.live
+                var c = res.colors
                 if (c.length === 0) return
                 // De los colores vivos del wallpaper, el más distinto al accent (que ya cubre los graves)
                 var best = c[0], bestD = -1
@@ -431,6 +437,15 @@ PlasmoidItem {
         onWidthChanged: updateGeometry()
         Component.onCompleted: updateGeometry()
 
+        // Fondo de video: solo los colores, cada medio segundo, para seguir al video (el resto
+        // del trabajo de abajo sigue cada colorsMs). Con fondo de imagen no corre.
+        Timer {
+            interval: root.liveColorsMs
+            running: root.liveVideo && !root.coveredActive && !root.manualOff
+            repeat: true
+            onTriggered: root.fetchColors()
+        }
+
         // Revisa cada pocos segundos: detecta si moviste el widget o cambiaste el wallpaper
         Timer {
             interval: root.colorsMs
@@ -493,7 +508,7 @@ PlasmoidItem {
                 height: area.height
 
                 property color c: root.barColor(index)
-                Behavior on c { ColorAnimation { duration: 600 } }   // al cambiar wallpaper o modo, el color se desliza en vez de saltar
+                Behavior on c { ColorAnimation { duration: root.liveVideo ? 250 : 600 } }   // al cambiar wallpaper o modo, el color se desliza en vez de saltar
                 readonly property real lv: (root.levels[index] || 0) / 100
                 readonly property real pk: (root.peaks[index] || 0) / 100
                 readonly property real barW: Math.min(root.barWidth, width)

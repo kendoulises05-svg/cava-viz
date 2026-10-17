@@ -183,7 +183,7 @@ Recarga solo lo que cambió:
 - **Wallpapers con mucho detalle:** con muchas zonas pequeñas de color, el modo por zona las promedia y puede elegir colores que no se vean bien.
 - **El modo automático** es experimental. En fondos muy detallados puede llevar los colores cerca del negro o el blanco para alcanzar el contraste.
 - **Una sola pantalla:** probado solo con un monitor.
-- **Fondo de video:** los colores siguen al video con un fotograma cada 4 s del momento que se ve, estimado por cuánto del archivo leyó plasmashell (puede adelantarse 1-2 s). En pausa usa un fotograma fijo. La primera vuelta de cada video saca fotogramas con ffmpeg (~0.1 s de CPU cada uno, solo el fotograma clave); después salen de la caché.
+- **Fondo de video:** los colores siguen al video. La primera vez que se ve un video, el puente lo prepara en segundo plano (un fotograma por segundo, de una pasada, con prioridad baja; con decodificación por hardware VA-API cuesta ~2 s de CPU para 97 s de video, sin ella usa solo los fotogramas clave). Mientras el fondo es video, el widget pide colores cada 0,5 s y la transición de color dura 0,25 s, así que el retraso es de menos de 1 s. El momento se estima por cuánto del archivo leyó plasmashell (puede adelantarse 1-2 s). En pausa usa un fotograma fijo. Se guardan hasta 30 videos preparados.
 
 ## Licencia
 

@@ -310,7 +310,9 @@ def current_video(data, c):
     return last if last in on else (on[0] if on else None)
 
 
-FRAME_STEP = 4          # segundos entre fotogramas para los colores de un fondo de video
+FRAME_STEP = 4          # segundos entre fotogramas sueltos (mientras el video aun no esta preparado)
+TIMELINES_MAX = 30      # videos preparados (un fotograma por segundo) que se guardan
+live = {"video": False}  # el fondo actual es un video: el widget consulta colores mas seguido
 FRAMES_MAX = 400        # fotogramas en cache como maximo (se borran los mas viejos)
 _durations = {}
 
@@ -353,7 +355,8 @@ def video_position(path):
 
 def _prune_frames():
     try:
-        files = sorted((os.path.join(FRAMES, f) for f in os.listdir(FRAMES)), key=os.path.getmtime)
+        files = sorted((os.path.join(FRAMES, f) for f in os.listdir(FRAMES) if f.endswith(".jpg")),
+                       key=os.path.getmtime)
     except OSError:
         return
     for f in files[:-FRAMES_MAX]:
@@ -363,16 +366,90 @@ def _prune_frames():
             pass
 
 
+def video_key(path):
+    return hashlib.sha1(f"{path}:{os.path.getmtime(path)}".encode()).hexdigest()[:16]
+
+
+def timeline_dir(path):
+    return os.path.join(FRAMES, "timeline-" + video_key(path))
+
+
+def prepare_timeline(path):
+    """Un fotograma por segundo de todo el video, de una pasada y con prioridad baja. Con la
+    decodificacion por hardware (VA-API) cuesta ~2 s de CPU para un video de 97 s 1080p60; sin
+    ella se usan solo los fotogramas clave (~1 s de CPU, menos precision). True si quedo listo."""
+    d = timeline_dir(path)
+    if os.path.isfile(os.path.join(d, ".done")):
+        return True
+    tmp = d + ".tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp, exist_ok=True)
+    out = os.path.join(tmp, "%05d.jpg")
+    attempts = []
+    if os.path.exists("/dev/dri/renderD128"):
+        attempts.append(["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-i", path,
+                         "-vf", "fps=1,scale_vaapi=w=320:h=180,hwdownload,format=nv12"])
+    attempts.append(["-skip_frame", "nokey", "-threads", "1", "-i", path, "-vf", "fps=1,scale=320:-2"])
+    for args in attempts:
+        try:
+            r = subprocess.run(["nice", "-n", "19", "ffmpeg", "-v", "error", "-y", *args, "-q:v", "6", out],
+                               capture_output=True, timeout=600)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0 and os.listdir(tmp):
+            open(os.path.join(tmp, ".done"), "w").close()
+            shutil.rmtree(d, ignore_errors=True)
+            os.rename(tmp, d)
+            _prune_timelines()
+            return True
+        for f in os.listdir(tmp):
+            os.remove(os.path.join(tmp, f))
+    shutil.rmtree(tmp, ignore_errors=True)
+    return False
+
+
+def _prune_timelines():
+    try:
+        dirs = sorted((os.path.join(FRAMES, x) for x in os.listdir(FRAMES) if x.startswith("timeline-")),
+                      key=os.path.getmtime)
+    except OSError:
+        return
+    for d in dirs[:-TIMELINES_MAX]:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def prepare_loop():
+    """Prepara en segundo plano el video que se esta viendo (una vez por video)."""
+    while True:
+        try:
+            data = read_appletsrc()
+            c = find_containment(data, -1)
+            if c is not None and wallpaper_plugin(data, c) == VIDEO_PLUGIN:
+                for path in playing_videos():
+                    if not os.path.isfile(os.path.join(timeline_dir(path), ".done")):
+                        log(f"Preparando colores del video: {os.path.basename(path)}")
+                        log("listo" if prepare_timeline(path) else "no se pudo preparar; se usan fotogramas sueltos")
+        except Exception as e:
+            log(f"Error preparando colores del video: {e}")
+        time.sleep(3)
+
+
 def video_frame(path, at=None):
-    """Fotograma del video en el segundo 'at' (redondeado a FRAME_STEP) como JPG en cache. Sin
-    'at': a un tercio del video (el principio suele ser negro)."""
+    """Fotograma del video en el segundo 'at' como JPG. Si el video ya esta preparado, el de ese
+    segundo; si no, uno suelto cada FRAME_STEP s (en cache). Sin 'at': a un tercio del video
+    (el principio suele ser negro)."""
     if not path or not os.path.isfile(path) or not shutil.which("ffmpeg"):
         return None
     dur = video_duration(path)
     if at is None:
         at = dur / 3 if dur else 3
+    d = timeline_dir(path)
+    if os.path.isfile(os.path.join(d, ".done")):
+        n = len([f for f in os.listdir(d) if f.endswith(".jpg")])
+        if n:
+            return os.path.join(d, f"{min(n, int(at) + 1):05d}.jpg")
     at = int(at // FRAME_STEP) * FRAME_STEP
-    key = hashlib.sha1(f"{path}:{os.path.getmtime(path)}".encode()).hexdigest()[:16]
+    key = video_key(path)
     out = os.path.join(FRAMES, f"{key}-{at:05d}.jpg")
     if os.path.isfile(out):
         return out
@@ -384,7 +461,7 @@ def video_frame(path, at=None):
                             "-i", path, "-frames:v", "1", "-vf", "scale=320:-2", out],
                            capture_output=True, timeout=30)
         if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
-            if len(os.listdir(FRAMES)) > FRAMES_MAX:
+            if len([f for f in os.listdir(FRAMES) if f.endswith(".jpg")]) > FRAMES_MAX:
                 _prune_frames()
             return out
     return None
@@ -420,6 +497,7 @@ def configured_image(data, c):
     """Imagen que Plasma tiene puesta en modo Imagen (o un fotograma del video, si el fondo es de
     video), o None si usa presentación u otro plugin."""
     plugin = wallpaper_plugin(data, c)
+    live["video"] = plugin == VIDEO_PLUGIN
     if plugin == VIDEO_PLUGIN:
         path = current_video(data, c)
         # los colores siguen al video: fotograma del momento que se ve (o uno fijo si esta en pausa)
@@ -982,7 +1060,7 @@ class Handler(BaseHTTPRequestHandler):
                                         lambda: contrast_bright(img, n, l, r, t, b))
             except Exception as e:
                 log(f"Error al leer colores del wallpaper: {e}")
-            return self.send(json.dumps({"colors": colors}).encode(), "application/json")
+            return self.send(json.dumps({"colors": colors, "live": live["video"]}).encode(), "application/json")
 
         # "D" (apagado a mano) y "P" (pausa) le avisan al widget que oculte las barras
         # y consulte menos seguido
@@ -998,4 +1076,5 @@ threading.Thread(target=cava_loop, daemon=True).start()
 threading.Thread(target=rotation_loop, daemon=True).start()
 threading.Thread(target=lock_loop, daemon=True).start()
 threading.Thread(target=terminal_loop, daemon=True).start()
+threading.Thread(target=prepare_loop, daemon=True).start()
 ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
