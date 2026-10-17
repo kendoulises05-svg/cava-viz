@@ -32,6 +32,7 @@ Un widget visualizador de audio para el escritorio de KDE Plasma 6. Dibuja barra
 - Rotación desde una carpeta: aleatorio, alfabético o más recientes primero, con intervalo en horas, minutos y segundos.
 - "Siguiente wallpaper" desde el menú de clic derecho del widget o con un atajo de teclado.
 - Reutiliza la carpeta y las imágenes excluidas de la configuración de presentación de Plasma.
+- **Fondo de video** (plugin Smart Video Wallpaper Reborn, el que pone [we-fetch](https://github.com/kendoulises05-svg/we-fetch)): los colores salen de un fotograma del video que se está viendo (con ffmpeg, en caché en `~/.cache/cava-viz/frames`) y "Siguiente wallpaper" pasa al siguiente video del plugin. Mientras el fondo sea video, la rotación por tiempo no pone imágenes encima: los videos los rota el plugin.
 
 **Consumo de recursos**
 - Pausa cava y oculta el widget cuando una ventana lo tapa (configurable: nunca, solo pantalla completa, pantalla completa o maximizada, o cualquier ventana que tape el widget, incluido tiling) o la pantalla está bloqueada.
@@ -182,6 +183,7 @@ Recarga solo lo que cambió:
 - **Wallpapers con mucho detalle:** con muchas zonas pequeñas de color, el modo por zona las promedia y puede elegir colores que no se vean bien.
 - **El modo automático** es experimental. En fondos muy detallados puede llevar los colores cerca del negro o el blanco para alcanzar el contraste.
 - **Una sola pantalla:** probado solo con un monitor.
+- **Fondo de video:** los colores salen de un fotograma fijo del video (a un tercio de su duración), no del momento que se ve; si el video cambia mucho de color, el visualizer no lo sigue.
 
 ## Licencia
 

@@ -19,6 +19,7 @@ Endpoints (solo 127.0.0.1):
   /next                               cambia al siguiente wallpaper
 """
 import colorsys
+import hashlib
 import json
 import os
 import random
@@ -44,6 +45,10 @@ APPLETSRC = os.path.expanduser("~/.config/plasma-org.kde.plasma.desktop-appletsr
 STATE = os.path.expanduser("~/.local/state/cava-viz/rotation.json")
 DISABLED_FLAG = os.path.expanduser("~/.local/state/cava-viz/disabled")  # existe = apagado a mano
 IMG_EXT = (".jpg", ".jpeg", ".png", ".webp")
+# Fondo de video (Smart Video Wallpaper Reborn, el que pone we-fetch): los colores salen de un
+# fotograma del video actual y "Siguiente wallpaper" pasa al siguiente video en vez de poner una imagen
+VIDEO_PLUGIN = "luisbocanegra.smart.video.wallpaper.reborn"
+FRAMES = os.path.expanduser("~/.cache/cava-viz/frames")
 PORT = 8765
 
 ORDER_RANDOM, ORDER_ALPHA, ORDER_NEWEST = 0, 1, 2
@@ -251,9 +256,89 @@ def image_group(data, c):
     return data.get(f"[Containments][{c}][Wallpaper][org.kde.image][General]", {})
 
 
+def wallpaper_plugin(data, c):
+    return data.get(f"[Containments][{c}]", {}).get("wallpaperplugin", "")
+
+
+def video_group(data, c):
+    return data.get(f"[Containments][{c}][Wallpaper][{VIDEO_PLUGIN}][General]", {})
+
+
+def video_entries(data, c):
+    """Lista VideoUrls del plugin de video (lista de dicts) o [] si no se puede leer."""
+    try:
+        entries = json.loads(video_group(data, c).get("VideoUrls", "") or "[]")
+    except ValueError:
+        return []
+    return [e for e in entries if isinstance(e, dict)]
+
+
+def current_video(data, c):
+    """Ruta del video que esta en el fondo: el ultimo que guardo el plugin (LastVideo) si sigue
+    en la lista, si no el primero activado."""
+    on = [e.get("filename", "") for e in video_entries(data, c) if e.get("enabled", True)]
+    last = video_group(data, c).get("LastVideo", "")
+    url = last if last in on else (on[0] if on else "")
+    return unquote(url.replace("file://", "", 1)) or None
+
+
+def video_frame(path):
+    """Fotograma de un tercio del video (el principio suele ser negro) como JPG en cache."""
+    if not path or not os.path.isfile(path) or not shutil.which("ffmpeg"):
+        return None
+    key = hashlib.sha1(f"{path}:{os.path.getmtime(path)}".encode()).hexdigest()[:16]
+    out = os.path.join(FRAMES, key + ".jpg")
+    if os.path.isfile(out):
+        return out
+    os.makedirs(FRAMES, exist_ok=True)
+    at = "3"
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                           capture_output=True, text=True, timeout=15)
+        at = f"{float(r.stdout.strip()) / 3:.2f}"
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        pass
+    for ss in (at, "0"):
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", ss, "-i", path, "-frames:v", "1",
+                            "-vf", "scale=600:-2", out], capture_output=True, timeout=30)
+        if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+            return out
+    return None
+
+
+def next_video(data, c):
+    """Pasa el fondo de video al siguiente: gira una posicion la lista de videos activados (el
+    plugin, al ver la lista nueva, muestra el que queda en la posicion actual). Devuelve (ok, detalle)."""
+    entries = video_entries(data, c)
+    on = [i for i, e in enumerate(entries) if e.get("enabled", True)]
+    if len(on) < 2:
+        return False, "solo hay un video en el fondo"
+    vids = [entries[i] for i in on]
+    vids = vids[1:] + vids[:1]
+    for i, e in zip(on, vids):
+        entries[i] = e
+    if not QDBUS:
+        return False, "no se encontro qdbus6"
+    script = (
+        "desktops().forEach(function (d) {"
+        f" if (d.wallpaperPlugin !== {json.dumps(VIDEO_PLUGIN)}) return;"
+        f" d.currentConfigGroup = ['Wallpaper', {json.dumps(VIDEO_PLUGIN)}, 'General'];"
+        f" d.writeConfig('VideoUrls', {json.dumps(json.dumps(entries, separators=(',', ':')))});"
+        " d.reloadConfig();"
+        "});"
+    )
+    r = subprocess.run([QDBUS, "org.kde.plasmashell", "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", script],
+                       capture_output=True, text=True, timeout=15)
+    return r.returncode == 0, (r.stdout.strip() or r.stderr.strip())
+
+
 def configured_image(data, c):
-    """Imagen que Plasma tiene puesta en modo Imagen, o None si usa presentación u otro plugin."""
-    if data.get(f"[Containments][{c}]", {}).get("wallpaperplugin") != "org.kde.image":
+    """Imagen que Plasma tiene puesta en modo Imagen (o un fotograma del video, si el fondo es de
+    video), o None si usa presentación u otro plugin."""
+    plugin = wallpaper_plugin(data, c)
+    if plugin == VIDEO_PLUGIN:
+        return video_frame(current_video(data, c))
+    if plugin != "org.kde.image":
         return None  # en presentación Plasma no expone la imagen actual
     value = image_group(data, c).get("Image", "")
     return unquote(value.replace("file://", "", 1)) or None
@@ -355,6 +440,17 @@ def rotation_step():
     data = read_appletsrc()
     c = find_containment(data, -1)
     if c is None:
+        return 60
+    if wallpaper_plugin(data, c) == VIDEO_PLUGIN:
+        # Fondo de video: los videos los rota el plugin. Solo se atiende "Siguiente wallpaper"
+        # (nunca se pone una imagen encima del video).
+        if rotate_now.is_set():
+            rotate_now.clear()
+            ok, detail = next_video(data, c)
+            log("Fondo de video: siguiente video" if ok else f"No se pudo pasar al siguiente video | {detail}")
+            if ok:
+                time.sleep(2)  # el plugin tarda un momento en guardar LastVideo
+                update_terminal_cava(configured_image(read_appletsrc(), c))
         return 60
     s = rotation_settings(state, data, c)
     if not s["enabled"]:
