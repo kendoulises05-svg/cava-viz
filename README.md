@@ -183,7 +183,7 @@ Reload only what changed:
 - **Busy wallpapers:** with many small color areas, the zone mode averages them and may pick colors that do not look right.
 - **Automatic mode** is experimental. On very detailed backgrounds it may push colors close to black or white to reach the contrast target.
 - **Single screen:** tested with one monitor only.
-- **Video wallpaper:** colors come from a fixed frame of the video (one third into it), not the moment on screen; if the video changes color a lot, the visualizer does not follow it.
+- **Video wallpaper:** colors follow the video with one frame every 4 s of the moment on screen, estimated from how much of the file plasmashell has read (may run 1-2 s ahead). While paused a fixed frame is used. The first pass of each video extracts frames with ffmpeg (~0.1 s CPU each, keyframe only); later passes use the cache.
 
 ## License
 

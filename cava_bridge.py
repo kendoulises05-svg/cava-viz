@@ -310,26 +310,82 @@ def current_video(data, c):
     return last if last in on else (on[0] if on else None)
 
 
-def video_frame(path):
-    """Fotograma de un tercio del video (el principio suele ser negro) como JPG en cache."""
+FRAME_STEP = 4          # segundos entre fotogramas para los colores de un fondo de video
+FRAMES_MAX = 400        # fotogramas en cache como maximo (se borran los mas viejos)
+_durations = {}
+
+
+def video_duration(path):
+    key = (path, os.path.getmtime(path))
+    if key not in _durations:
+        try:
+            r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                               capture_output=True, text=True, timeout=15)
+            _durations[key] = float(r.stdout.strip())
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            _durations[key] = 0.0
+    return _durations[key]
+
+
+def video_position(path):
+    """Segundo que se esta viendo, estimado por cuanto del archivo ha leido plasmashell
+    (/proc/<pid>/fdinfo: pos). El lector va un poco por delante: se resta 1 s. None si no lo
+    tiene abierto (pausado o cerrado)."""
+    size, dur = os.path.getsize(path), video_duration(path)
+    if not size or not dur:
+        return None
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/comm") as f:
+                if f.read().strip() != "plasmashell":
+                    continue
+            for fd in os.listdir(f"/proc/{d}/fd"):
+                if os.readlink(f"/proc/{d}/fd/{fd}") == path:
+                    with open(f"/proc/{d}/fdinfo/{fd}") as f:
+                        pos = int(next(l for l in f if l.startswith("pos:")).split()[1])
+                    return max(0.0, min(dur, pos / size * dur - 1.0))
+        except (OSError, StopIteration, ValueError):
+            continue
+    return None
+
+
+def _prune_frames():
+    try:
+        files = sorted((os.path.join(FRAMES, f) for f in os.listdir(FRAMES)), key=os.path.getmtime)
+    except OSError:
+        return
+    for f in files[:-FRAMES_MAX]:
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
+
+def video_frame(path, at=None):
+    """Fotograma del video en el segundo 'at' (redondeado a FRAME_STEP) como JPG en cache. Sin
+    'at': a un tercio del video (el principio suele ser negro)."""
     if not path or not os.path.isfile(path) or not shutil.which("ffmpeg"):
         return None
+    dur = video_duration(path)
+    if at is None:
+        at = dur / 3 if dur else 3
+    at = int(at // FRAME_STEP) * FRAME_STEP
     key = hashlib.sha1(f"{path}:{os.path.getmtime(path)}".encode()).hexdigest()[:16]
-    out = os.path.join(FRAMES, key + ".jpg")
+    out = os.path.join(FRAMES, f"{key}-{at:05d}.jpg")
     if os.path.isfile(out):
         return out
     os.makedirs(FRAMES, exist_ok=True)
-    at = "3"
-    try:
-        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
-                           capture_output=True, text=True, timeout=15)
-        at = f"{float(r.stdout.strip()) / 3:.2f}"
-    except (ValueError, OSError, subprocess.TimeoutExpired):
-        pass
-    for ss in (at, "0"):
-        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", ss, "-i", path, "-frames:v", "1",
-                            "-vf", "scale=600:-2", out], capture_output=True, timeout=30)
+    for ss in (str(at), "0"):
+        # -ss antes de -i: salta directo; -skip_frame nokey: solo decodifica el fotograma clave mas
+        # cercano (medido: 0.11 s de CPU frente a 0.85 s), que para sacar colores sobra
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-skip_frame", "nokey", "-threads", "1", "-ss", ss,
+                            "-i", path, "-frames:v", "1", "-vf", "scale=320:-2", out],
+                           capture_output=True, timeout=30)
         if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+            if len(os.listdir(FRAMES)) > FRAMES_MAX:
+                _prune_frames()
             return out
     return None
 
@@ -365,7 +421,9 @@ def configured_image(data, c):
     video), o None si usa presentación u otro plugin."""
     plugin = wallpaper_plugin(data, c)
     if plugin == VIDEO_PLUGIN:
-        return video_frame(current_video(data, c))
+        path = current_video(data, c)
+        # los colores siguen al video: fotograma del momento que se ve (o uno fijo si esta en pausa)
+        return video_frame(path, video_position(path) if path else None)
     if plugin != "org.kde.image":
         return None  # en presentación Plasma no expone la imagen actual
     value = image_group(data, c).get("Image", "")
