@@ -273,13 +273,41 @@ def video_entries(data, c):
     return [e for e in entries if isinstance(e, dict)]
 
 
+def playing_videos():
+    """Videos que plasmashell tiene abiertos ahora (el que se ve; dos durante un crossfade),
+    del mas reciente al mas antiguo. El plugin NO actualiza LastVideo mientras reproduce (ni en
+    disco ni en memoria), asi que esta es la forma fiable de saber cual se ve."""
+    out = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/comm") as f:
+                if f.read().strip() != "plasmashell":
+                    continue
+            fds = sorted(os.listdir(f"/proc/{d}/fd"), key=int, reverse=True)  # fd mas alto = abierto despues
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                t = os.readlink(f"/proc/{d}/fd/{fd}")
+            except OSError:
+                continue
+            if t.lower().endswith((".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v")) and t not in out:
+                out.append(t)
+    return out
+
+
 def current_video(data, c):
-    """Ruta del video que esta en el fondo: el ultimo que guardo el plugin (LastVideo) si sigue
-    en la lista, si no el primero activado."""
-    on = [e.get("filename", "") for e in video_entries(data, c) if e.get("enabled", True)]
-    last = video_group(data, c).get("LastVideo", "")
-    url = last if last in on else (on[0] if on else "")
-    return unquote(url.replace("file://", "", 1)) or None
+    """Ruta del video que esta en el fondo: el que plasmashell tiene abierto (si esta en la lista
+    del plugin); si no, LastVideo si sigue en la lista, y si no el primero activado."""
+    on = [unquote(e.get("filename", "").replace("file://", "", 1))
+          for e in video_entries(data, c) if e.get("enabled", True)]
+    for path in playing_videos():
+        if path in on:
+            return path
+    last = unquote(video_group(data, c).get("LastVideo", "").replace("file://", "", 1))
+    return last if last in on else (on[0] if on else None)
 
 
 def video_frame(path):
