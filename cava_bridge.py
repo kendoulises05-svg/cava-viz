@@ -492,9 +492,9 @@ def write_segments(d):
             cuts.append(i)
             start = i
     cuts.append(len(vecs))
-    # en segundos; el color sale del COMIENZO del tramo (el segundo fotograma si lo hay, que ya
-    # es la escena nueva tras el corte), no del medio: el del medio adelantaba el color
-    segs = [[a / TIMELINE_FPS, b / TIMELINE_FPS, min(a + 2, b)] for a, b in zip(cuts, cuts[1:])]
+    # en segundos; el color sale del PRIMER fotograma del tramo (el del corte; numerados desde 1).
+    # El del medio, o el segundo, adelantaban el color
+    segs = [[a / TIMELINE_FPS, b / TIMELINE_FPS, a + 1] for a, b in zip(cuts, cuts[1:])]
     with open(os.path.join(d, "segments.json"), "w") as f:
         json.dump(segs, f)
 
@@ -541,11 +541,13 @@ def video_clock(path):
     est = max(0.0, pos / size * dur - LEAD)       # lo que dice la lectura
     c = _clocks.get(path)
     if c is None or pos < c["pos"] - size * 0.3:
-        # primera vez (o el puente arranco a mitad): por la lectura; volvio a empezar: desde 0
-        start = est if c is None else 0.0
+        # primera vez (o el puente arranco a mitad): por la lectura. Volvio a empezar: la lectura
+        # llega al principio LEAD segundos ANTES de que se vea el reinicio (lee por delante), asi
+        # que el reloj arranca en -LEAD (el final de la vuelta anterior)
+        start = est if c is None else -LEAD
         c = _clocks[path] = {"t0": now - start, "pos": pos}
     c["pos"] = pos
-    t = (now - c["t0"]) % dur
+    t = (now - c["t0"]) % dur          # -LEAD % dur = dur - LEAD: los ultimos segundos de la vuelta
     if abs(t - est) > RESYNC and pos < size * 0.98:
         c["t0"] = now - est                         # pausa o salto: se vuelve a la lectura
         t = est
@@ -599,6 +601,10 @@ def video_segment(path):
     d, segs = load_segments(path)
     if not segs:
         return None
+    if _clocks.get("_current") != path:
+        # paso a verse otro video: su reloj empieza ahora (pudo abrirse antes, por la precarga)
+        _clocks.pop(path, None)
+        _clocks["_current"] = path
     t = video_clock(path)
     if t is None:
         t = video_duration(path) / 3
