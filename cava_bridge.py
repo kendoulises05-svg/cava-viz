@@ -290,7 +290,7 @@ def video_entries(data, c):
 
 
 VIDEO_EXT = (".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v")
-_shell = {"pid": None, "fds": {}, "at": 0.0}   # plasmashell y sus videos abiertos {ruta: fd}
+_shell = {"pid": None, "fds": {}, "at": 0.0, "seen": {}}   # plasmashell, sus videos {ruta: fd} y desde cuando
 
 
 def _plasmashell_pid():
@@ -342,13 +342,18 @@ def _video_fds():
             continue
         if t.lower().endswith(VIDEO_EXT) and t not in found:
             found[t] = fd
-    _shell.update(fds=found, at=time.time())
+    now = time.time()
+    seen = {p: _shell["seen"].get(p, now) for p in found}
+    # el que lleva mas tiempo abierto va primero: el plugin abre el SIGUIENTE video unos segundos
+    # antes del cambio (precarga y fundido) y ese aun no se ve
+    found = dict(sorted(found.items(), key=lambda kv: seen[kv[0]]))
+    _shell.update(fds=found, at=now, seen=seen)
     return found
 
 
 def playing_videos():
-    """Videos que plasmashell tiene abiertos ahora (el que se ve; dos durante un crossfade),
-    del mas reciente al mas antiguo. El plugin NO actualiza LastVideo mientras reproduce (ni en
+    """Videos que plasmashell tiene abiertos ahora (el que se ve; dos durante la precarga o el
+    fundido), del que lleva mas tiempo abierto al mas nuevo. El plugin NO actualiza LastVideo mientras reproduce (ni en
     disco ni en memoria), asi que esta es la forma fiable de saber cual se ve."""
     return list(_video_fds())
 
@@ -457,8 +462,9 @@ def prepare_timeline(path):
     return False
 
 
-CUT_DIFF = 26           # diferencia media (0-255) entre segundos seguidos que cuenta como cambio de color
-DRIFT_DIFF = 40         # o diferencia acumulada desde el inicio del tramo (cambios lentos)
+CUT_DIFF = 22           # diferencia media (0-255) entre fotogramas seguidos que cuenta como cambio de escena
+DRIFT_DIFF = 45         # o diferencia acumulada desde el inicio del tramo (cambios lentos)
+SEG_MAX = 3.0           # un tramo nunca dura mas que esto: en cambios lentos el color sigue al video
 
 
 def _tiny(path):
@@ -479,13 +485,16 @@ def write_segments(d):
         return
     vecs = [_tiny(os.path.join(d, f)) for f in frames]
     cuts, start = [0], 0
+    longest = max(1, int(SEG_MAX * TIMELINE_FPS))
     for i in range(1, len(vecs)):
-        if _diff(vecs[i], vecs[i - 1]) > CUT_DIFF or _diff(vecs[i], vecs[start]) > DRIFT_DIFF:
+        if (_diff(vecs[i], vecs[i - 1]) > CUT_DIFF or _diff(vecs[i], vecs[start]) > DRIFT_DIFF
+                or i - start >= longest):
             cuts.append(i)
             start = i
     cuts.append(len(vecs))
-    # en segundos; el fotograma representativo es el del medio (numerados desde 1)
-    segs = [[a / TIMELINE_FPS, b / TIMELINE_FPS, (a + b - 1) // 2 + 1] for a, b in zip(cuts, cuts[1:])]
+    # en segundos; el color sale del COMIENZO del tramo (el segundo fotograma si lo hay, que ya
+    # es la escena nueva tras el corte), no del medio: el del medio adelantaba el color
+    segs = [[a / TIMELINE_FPS, b / TIMELINE_FPS, min(a + 2, b)] for a, b in zip(cuts, cuts[1:])]
     with open(os.path.join(d, "segments.json"), "w") as f:
         json.dump(segs, f)
 
@@ -510,7 +519,7 @@ def segment_at(segs, t):
 # El reproductor lee el archivo por delante y a tirones, asi que la posicion de lectura se
 # adelanta. El reloj cuenta tiempo real desde que empieza el video (o vuelve a empezar al
 # repetirse); la lectura solo detecta inicio, repeticion y desfases grandes (pausa).
-LEAD = 1.5              # segundos que la lectura va por delante de lo que se ve (medido 1-2 s)
+LEAD = 1.0              # segundos que la lectura va por delante (medido en plasmashell: 0,6-1,5 s, varia con la escena)
 RESYNC = 3.0            # si reloj y lectura difieren mas que esto (p. ej. tras una pausa), se corrige
 _clocks = {}
 
@@ -555,13 +564,25 @@ def _prune_timelines():
 
 def prepare_loop():
     """Prepara en segundo plano el video que se esta viendo (una vez por video)."""
+    # al arrancar: tramos de videos preparados con una version anterior (barato: solo compara)
+    try:
+        for x in os.listdir(FRAMES):
+            d = os.path.join(FRAMES, x)
+            if x.startswith("timeline") and os.path.isfile(os.path.join(d, ".done")) \
+                    and not os.path.isfile(os.path.join(d, "segments.json")):
+                write_segments(d)
+    except OSError:
+        pass
     while True:
         try:
             data = read_appletsrc()
             c = find_containment(data, -1)
             if c is not None and wallpaper_plugin(data, c) == VIDEO_PLUGIN:
                 for path in playing_videos():
-                    if not os.path.isfile(os.path.join(timeline_dir(path), ".done")):
+                    d = timeline_dir(path)
+                    if os.path.isfile(os.path.join(d, ".done")) and not os.path.isfile(os.path.join(d, "segments.json")):
+                        write_segments(d)            # tramos de una version anterior: se recalculan
+                    if not os.path.isfile(os.path.join(d, ".done")):
                         log(f"Preparando colores del video: {os.path.basename(path)}")
                         log("listo" if prepare_timeline(path) else "no se pudo preparar; se usan fotogramas sueltos")
         except Exception as e:
