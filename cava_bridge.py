@@ -593,6 +593,9 @@ def prepare_loop():
 
 
 ANTICIPATE = 0.25       # la transicion de color del widget dura esto: se empieza antes del corte
+# Ajuste fino del momento (segundos que se retrasan los colores). Lo que tarda el reproductor en
+# mostrar un fotograma y el widget en pintar; probado a ojo: con 0 los colores iban 0,5 s adelantados
+VIEW_DELAY = 0.5
 
 
 def video_segment(path):
@@ -608,6 +611,8 @@ def video_segment(path):
     t = video_clock(path)
     if t is None:
         t = video_duration(path) / 3
+    else:
+        t = (t - VIEW_DELAY) % max(video_duration(path), 0.001)
     i = segment_at(segs, t + ANTICIPATE)
     out = {"frame": os.path.join(d, f"{segs[i][2]:05d}.jpg"), "next": None, "in": None}
     if len(segs) > 1:
