@@ -26,6 +26,8 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     systemctl --user daemon-reload
     info "Quitando el widget..."
     kpackagetool6 -t Plasma/Applet -r "$PLASMOID_ID" 2>/dev/null || true
+    info "Quitando la copia del plugin de video (si la habia)..."
+    /usr/bin/python3 "$REPO_DIR/video_plugin.py" --remove || true
     info "Listo. raw.conf y tus wallpapers no se tocaron."
     exit 0
 fi
@@ -94,6 +96,16 @@ else
     kpackagetool6 -t Plasma/Applet -i . >/dev/null
     info "Widget instalado."
     FIRST_TIME=1
+fi
+
+# ---------- 4b. Plugin de video (opcional): colores exactos con fondos de video ----------
+# Copia local de Smart Video Wallpaper Reborn que avisa al puente en que segundo va el video
+if [[ -d /usr/share/plasma/wallpapers/luisbocanegra.smart.video.wallpaper.reborn ]]; then
+    if /usr/bin/python3 "$REPO_DIR/video_plugin.py" --install; then
+        info "Plugin de video listo: los colores irán sincronizados con fondos de video."
+    else
+        warn "No se pudo preparar el plugin de video; los colores del video serán aproximados."
+    fi
 fi
 
 # ---------- 5. Verificación ----------

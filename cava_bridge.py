@@ -17,6 +17,8 @@ Endpoints (solo 127.0.0.1):
                                       del fondo detrás del widget (contrast ratio WCAG >= 3:1) (JSON)
   /rotation?enabled=&dir=&seconds=&order=    config de la rotación (la manda el widget)
   /next                               cambia al siguiente wallpaper
+  /videopos?f=&t=&d=&p=               posicion exacta del fondo de video (la manda la copia del
+                                      plugin, video_plugin.py); sin parametros: lo ultimo recibido
 """
 import colorsys
 import hashlib
@@ -363,6 +365,9 @@ def current_video(data, c):
     del plugin); si no, LastVideo si sigue en la lista, y si no el primero activado."""
     on = [unquote(e.get("filename", "").replace("file://", "", 1))
           for e in video_entries(data, c) if e.get("enabled", True)]
+    fresh = [p for p, r in reports.items() if time.monotonic() - r["at"] <= REPORT_FRESH and p in on]
+    if fresh:
+        return max(fresh, key=lambda p: reports[p]["at"])   # el plugin dice cual se ve
     for path in playing_videos():
         if path in on:
             return path
@@ -522,6 +527,19 @@ def segment_at(segs, t):
 LEAD = 1.0              # segundos que la lectura va por delante (medido en plasmashell: 0,6-1,5 s, varia con la escena)
 RESYNC = 3.0            # si reloj y lectura difieren mas que esto (p. ej. tras una pausa), se corrige
 _clocks = {}
+# Posicion exacta que manda la copia del plugin de video (video_plugin.py): {ruta: {...}}
+reports = {}
+REPORT_FRESH = 2.0      # segundos que vale un aviso del plugin (llega cada 0,5 s)
+EXACT_DELAY = 0.1       # con la posicion exacta solo queda lo que tarda en pintarse
+
+
+def reported_position(path):
+    """Segundo exacto del video segun el plugin, o None si no hay aviso reciente."""
+    r = reports.get(path)
+    if not r or time.monotonic() - r["at"] > REPORT_FRESH:
+        return None
+    t = r["t"] + (time.monotonic() - r["at"] if r["playing"] else 0.0)
+    return t % r["d"] if r["d"] > 0 else t
 
 
 def video_clock(path):
@@ -608,11 +626,15 @@ def video_segment(path):
         # paso a verse otro video: su reloj empieza ahora (pudo abrirse antes, por la precarga)
         _clocks.pop(path, None)
         _clocks["_current"] = path
-    t = video_clock(path)
-    if t is None:
-        t = video_duration(path) / 3
+    exact = reported_position(path)
+    if exact is not None:
+        t = max(0.0, exact - EXACT_DELAY)
     else:
-        t = (t - VIEW_DELAY) % max(video_duration(path), 0.001)
+        t = video_clock(path)
+        if t is None:
+            t = video_duration(path) / 3
+        else:
+            t = (t - VIEW_DELAY) % max(video_duration(path), 0.001)
     i = segment_at(segs, t + ANTICIPATE)
     out = {"frame": os.path.join(d, f"{segs[i][2]:05d}.jpg"), "next": None, "in": None}
     if len(segs) > 1:
@@ -1258,6 +1280,22 @@ class Handler(BaseHTTPRequestHandler):
                 update_rotation_settings(q)
             except Exception as e:
                 log(f"Config de rotación inválida: {e}")
+        elif url.path == "/videopos":
+            # aviso de la copia del plugin de video: archivo, posicion y duracion (ms), reproduciendo.
+            # Sin parametros: lo ultimo recibido (para diagnosticar)
+            if "f" not in q:
+                now = time.monotonic()
+                return self.send(json.dumps({os.path.basename(k): {**v, "hace_s": round(now - v["at"], 2)}
+                                             for k, v in reports.items()}).encode(), "application/json")
+            try:
+                f = unquote(q.get("f", "")).replace("file://", "", 1)
+                reports[f] = {"t": int(q.get("t", 0)) / 1000, "d": int(q.get("d", 0)) / 1000,
+                              "playing": q.get("p", "1") == "1", "at": time.monotonic()}
+                if len(reports) > 8:
+                    reports.pop(next(iter(reports)))
+            except ValueError:
+                pass
+            return self.send(b"ok")
         elif url.path in ("/palette", "/zones", "/contrast", "/auto"):
             colors, extra = [], {}
             try:
@@ -1298,6 +1336,11 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+try:
+    import video_plugin
+    video_plugin.ensure(log)
+except Exception as e:
+    log(f"No se pudo revisar la copia del plugin de video: {e}")
 threading.Thread(target=cava_loop, daemon=True).start()
 threading.Thread(target=rotation_loop, daemon=True).start()
 threading.Thread(target=lock_loop, daemon=True).start()
