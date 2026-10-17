@@ -530,7 +530,7 @@ _clocks = {}
 # Posicion exacta que manda la copia del plugin de video (video_plugin.py): {ruta: {...}}
 reports = {}
 REPORT_FRESH = 2.0      # segundos que vale un aviso del plugin (llega cada 0,5 s)
-EXACT_DELAY = 0.1       # con la posicion exacta solo queda lo que tarda en pintarse
+EXACT_DELAY = 0.15      # con la posicion exacta solo queda lo que tarda en pintarse (0,1 iba 0,05 s adelantado)
 
 
 def reported_position(path):
