@@ -224,8 +224,24 @@ def terminal_loop():
 
 # ---------------- config de Plasma ----------------
 
+_appletsrc = {"mtime": None, "data": None}
+
+
 def read_appletsrc():
-    """Devuelve {"[seccion]": {clave: valor}} del archivo de config del escritorio."""
+    """Devuelve {"[seccion]": {clave: valor}} del archivo de config del escritorio. Se vuelve a
+    leer solo si el archivo cambio (con fondo de video el widget consulta cada 0,5 s)."""
+    try:
+        mtime = os.stat(APPLETSRC).st_mtime_ns
+    except OSError:
+        mtime = None
+    if mtime is not None and mtime == _appletsrc["mtime"]:
+        return _appletsrc["data"]
+    data = _read_appletsrc_file()
+    _appletsrc.update(mtime=mtime, data=data)
+    return data
+
+
+def _read_appletsrc_file():
     data = {}
     section = None
     with open(APPLETSRC, encoding="utf-8") as f:
@@ -273,29 +289,68 @@ def video_entries(data, c):
     return [e for e in entries if isinstance(e, dict)]
 
 
+VIDEO_EXT = (".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v")
+_shell = {"pid": None, "fds": {}, "at": 0.0}   # plasmashell y sus videos abiertos {ruta: fd}
+
+
+def _plasmashell_pid():
+    pid = _shell["pid"]
+    if pid:
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() == "plasmashell":
+                    return pid
+        except OSError:
+            pass
+    for d in os.listdir("/proc"):
+        if d.isdigit():
+            try:
+                with open(f"/proc/{d}/comm") as f:
+                    if f.read().strip() == "plasmashell":
+                        _shell.update(pid=d, fds={}, at=0.0)
+                        return d
+            except OSError:
+                continue
+    _shell.update(pid=None, fds={})
+    return None
+
+
+def _video_fds():
+    """{ruta: fd} de los videos que plasmashell tiene abiertos. Se revisan los fd ya conocidos en
+    cada consulta (barato) y la lista completa solo cada 2 s o si alguno cambio."""
+    pid = _plasmashell_pid()
+    if not pid:
+        return {}
+    known = _shell["fds"]
+    ok = True
+    for path, fd in known.items():
+        try:
+            ok = ok and os.readlink(f"/proc/{pid}/fd/{fd}") == path
+        except OSError:
+            ok = False
+    if ok and known and time.time() - _shell["at"] < 2:
+        return known
+    found = {}
+    try:
+        fds = sorted(os.listdir(f"/proc/{pid}/fd"), key=int, reverse=True)  # fd mas alto = abierto despues
+    except OSError:
+        fds = []
+    for fd in fds:
+        try:
+            t = os.readlink(f"/proc/{pid}/fd/{fd}")
+        except OSError:
+            continue
+        if t.lower().endswith(VIDEO_EXT) and t not in found:
+            found[t] = fd
+    _shell.update(fds=found, at=time.time())
+    return found
+
+
 def playing_videos():
     """Videos que plasmashell tiene abiertos ahora (el que se ve; dos durante un crossfade),
     del mas reciente al mas antiguo. El plugin NO actualiza LastVideo mientras reproduce (ni en
     disco ni en memoria), asi que esta es la forma fiable de saber cual se ve."""
-    out = []
-    for d in os.listdir("/proc"):
-        if not d.isdigit():
-            continue
-        try:
-            with open(f"/proc/{d}/comm") as f:
-                if f.read().strip() != "plasmashell":
-                    continue
-            fds = sorted(os.listdir(f"/proc/{d}/fd"), key=int, reverse=True)  # fd mas alto = abierto despues
-        except OSError:
-            continue
-        for fd in fds:
-            try:
-                t = os.readlink(f"/proc/{d}/fd/{fd}")
-            except OSError:
-                continue
-            if t.lower().endswith((".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v")) and t not in out:
-                out.append(t)
-    return out
+    return list(_video_fds())
 
 
 def current_video(data, c):
@@ -311,7 +366,8 @@ def current_video(data, c):
 
 
 FRAME_STEP = 4          # segundos entre fotogramas sueltos (mientras el video aun no esta preparado)
-TIMELINES_MAX = 30      # videos preparados (un fotograma por segundo) que se guardan
+TIMELINES_MAX = 30      # videos preparados que se guardan
+TIMELINE_FPS = 2        # fotogramas por segundo al preparar un video (los cortes caen con +-0,25 s)
 live = {"video": False}  # el fondo actual es un video: el widget consulta colores mas seguido
 FRAMES_MAX = 400        # fotogramas en cache como maximo (se borran los mas viejos)
 _durations = {}
@@ -334,23 +390,15 @@ def video_position(path):
     (/proc/<pid>/fdinfo: pos). El lector va un poco por delante: se resta 1 s. None si no lo
     tiene abierto (pausado o cerrado)."""
     size, dur = os.path.getsize(path), video_duration(path)
-    if not size or not dur:
+    fd = _video_fds().get(path)
+    if not size or not dur or fd is None:
         return None
-    for d in os.listdir("/proc"):
-        if not d.isdigit():
-            continue
-        try:
-            with open(f"/proc/{d}/comm") as f:
-                if f.read().strip() != "plasmashell":
-                    continue
-            for fd in os.listdir(f"/proc/{d}/fd"):
-                if os.readlink(f"/proc/{d}/fd/{fd}") == path:
-                    with open(f"/proc/{d}/fdinfo/{fd}") as f:
-                        pos = int(next(l for l in f if l.startswith("pos:")).split()[1])
-                    return max(0.0, min(dur, pos / size * dur - 1.0))
-        except (OSError, StopIteration, ValueError):
-            continue
-    return None
+    try:
+        with open(f"/proc/{_shell['pid']}/fdinfo/{fd}") as f:
+            pos = int(next(l for l in f if l.startswith("pos:")).split()[1])
+    except (OSError, StopIteration, ValueError, TypeError):
+        return None
+    return max(0.0, min(dur, pos / size * dur - 1.0))
 
 
 def _prune_frames():
@@ -371,11 +419,11 @@ def video_key(path):
 
 
 def timeline_dir(path):
-    return os.path.join(FRAMES, "timeline-" + video_key(path))
+    return os.path.join(FRAMES, f"timeline{TIMELINE_FPS}-" + video_key(path))
 
 
 def prepare_timeline(path):
-    """Un fotograma por segundo de todo el video, de una pasada y con prioridad baja. Con la
+    """TIMELINE_FPS fotogramas por segundo de todo el video, de una pasada y con prioridad baja. Con la
     decodificacion por hardware (VA-API) cuesta ~2 s de CPU para un video de 97 s 1080p60; sin
     ella se usan solo los fotogramas clave (~1 s de CPU, menos precision). True si quedo listo."""
     d = timeline_dir(path)
@@ -388,8 +436,8 @@ def prepare_timeline(path):
     attempts = []
     if os.path.exists("/dev/dri/renderD128"):
         attempts.append(["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-i", path,
-                         "-vf", "fps=1,scale_vaapi=w=320:h=180,hwdownload,format=nv12"])
-    attempts.append(["-skip_frame", "nokey", "-threads", "1", "-i", path, "-vf", "fps=1,scale=320:-2"])
+                         "-vf", f"fps={TIMELINE_FPS},scale_vaapi=w=320:h=180,hwdownload,format=nv12"])
+    attempts.append(["-skip_frame", "nokey", "-threads", "1", "-i", path, "-vf", f"fps={TIMELINE_FPS},scale=320:-2"])
     for args in attempts:
         try:
             r = subprocess.run(["nice", "-n", "19", "ffmpeg", "-v", "error", "-y", *args, "-q:v", "6", out],
@@ -397,6 +445,7 @@ def prepare_timeline(path):
         except (OSError, subprocess.TimeoutExpired):
             continue
         if r.returncode == 0 and os.listdir(tmp):
+            write_segments(tmp)
             open(os.path.join(tmp, ".done"), "w").close()
             shutil.rmtree(d, ignore_errors=True)
             os.rename(tmp, d)
@@ -408,9 +457,95 @@ def prepare_timeline(path):
     return False
 
 
+CUT_DIFF = 26           # diferencia media (0-255) entre segundos seguidos que cuenta como cambio de color
+DRIFT_DIFF = 40         # o diferencia acumulada desde el inicio del tramo (cambios lentos)
+
+
+def _tiny(path):
+    """Fotograma reducido a 16x9 (lista de valores RGB) para comparar colores rapido."""
+    with Image.open(path) as im:
+        return list(im.convert("RGB").resize((16, 9)).tobytes())
+
+
+def _diff(a, b):
+    return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+
+
+def write_segments(d):
+    """Divide el video en tramos de color estable (cambios de escena) y guarda segments.json:
+    [[inicio_s, fin_s, fotograma_representativo], ...]."""
+    frames = sorted(f for f in os.listdir(d) if f.endswith(".jpg"))
+    if Image is None or not frames:
+        return
+    vecs = [_tiny(os.path.join(d, f)) for f in frames]
+    cuts, start = [0], 0
+    for i in range(1, len(vecs)):
+        if _diff(vecs[i], vecs[i - 1]) > CUT_DIFF or _diff(vecs[i], vecs[start]) > DRIFT_DIFF:
+            cuts.append(i)
+            start = i
+    cuts.append(len(vecs))
+    # en segundos; el fotograma representativo es el del medio (numerados desde 1)
+    segs = [[a / TIMELINE_FPS, b / TIMELINE_FPS, (a + b - 1) // 2 + 1] for a, b in zip(cuts, cuts[1:])]
+    with open(os.path.join(d, "segments.json"), "w") as f:
+        json.dump(segs, f)
+
+
+def load_segments(path):
+    d = timeline_dir(path)
+    try:
+        with open(os.path.join(d, "segments.json")) as f:
+            return d, json.load(f)
+    except (OSError, ValueError):
+        return d, None
+
+
+def segment_at(segs, t):
+    for i, (a, b, _) in enumerate(segs):
+        if a <= t < b:
+            return i
+    return len(segs) - 1
+
+
+# --- reloj del video -----------------------------------------------------------------
+# El reproductor lee el archivo por delante y a tirones, asi que la posicion de lectura se
+# adelanta. El reloj cuenta tiempo real desde que empieza el video (o vuelve a empezar al
+# repetirse); la lectura solo detecta inicio, repeticion y desfases grandes (pausa).
+LEAD = 1.5              # segundos que la lectura va por delante de lo que se ve (medido 1-2 s)
+RESYNC = 3.0            # si reloj y lectura difieren mas que esto (p. ej. tras una pausa), se corrige
+_clocks = {}
+
+
+def video_clock(path):
+    fd = _video_fds().get(path)
+    if fd is None:
+        _clocks.pop(path, None)
+        return None
+    try:
+        size, dur = os.path.getsize(path), video_duration(path)
+        with open(f"/proc/{_shell['pid']}/fdinfo/{fd}") as f:
+            pos = int(next(l for l in f if l.startswith("pos:")).split()[1])
+    except (OSError, StopIteration, ValueError, TypeError):
+        return None
+    if not size or not dur:
+        return None
+    now = time.monotonic()
+    est = max(0.0, pos / size * dur - LEAD)       # lo que dice la lectura
+    c = _clocks.get(path)
+    if c is None or pos < c["pos"] - size * 0.3:
+        # primera vez (o el puente arranco a mitad): por la lectura; volvio a empezar: desde 0
+        start = est if c is None else 0.0
+        c = _clocks[path] = {"t0": now - start, "pos": pos}
+    c["pos"] = pos
+    t = (now - c["t0"]) % dur
+    if abs(t - est) > RESYNC and pos < size * 0.98:
+        c["t0"] = now - est                         # pausa o salto: se vuelve a la lectura
+        t = est
+    return t
+
+
 def _prune_timelines():
     try:
-        dirs = sorted((os.path.join(FRAMES, x) for x in os.listdir(FRAMES) if x.startswith("timeline-")),
+        dirs = sorted((os.path.join(FRAMES, x) for x in os.listdir(FRAMES) if x.startswith("timeline") and not x.endswith(".tmp")),
                       key=os.path.getmtime)
     except OSError:
         return
@@ -434,6 +569,28 @@ def prepare_loop():
         time.sleep(3)
 
 
+ANTICIPATE = 0.25       # la transicion de color del widget dura esto: se empieza antes del corte
+
+
+def video_segment(path):
+    """Tramo de color actual y el siguiente de un video preparado:
+    {"frame": jpg del tramo, "next": jpg del siguiente, "in": ms hasta el corte} o None."""
+    d, segs = load_segments(path)
+    if not segs:
+        return None
+    t = video_clock(path)
+    if t is None:
+        t = video_duration(path) / 3
+    i = segment_at(segs, t + ANTICIPATE)
+    out = {"frame": os.path.join(d, f"{segs[i][2]:05d}.jpg"), "next": None, "in": None}
+    if len(segs) > 1:
+        j = (i + 1) % len(segs)
+        start = segs[i][1] if j else video_duration(path)   # el ultimo tramo enlaza con el primero
+        out.update(next=os.path.join(d, f"{segs[j][2]:05d}.jpg"),
+                   **{"in": max(0, int((start - t - ANTICIPATE) * 1000))})
+    return out
+
+
 def video_frame(path, at=None):
     """Fotograma del video en el segundo 'at' como JPG. Si el video ya esta preparado, el de ese
     segundo; si no, uno suelto cada FRAME_STEP s (en cache). Sin 'at': a un tercio del video
@@ -447,7 +604,7 @@ def video_frame(path, at=None):
     if os.path.isfile(os.path.join(d, ".done")):
         n = len([f for f in os.listdir(d) if f.endswith(".jpg")])
         if n:
-            return os.path.join(d, f"{min(n, int(at) + 1):05d}.jpg")
+            return os.path.join(d, f"{min(n, int(at * TIMELINE_FPS) + 1):05d}.jpg")
     at = int(at // FRAME_STEP) * FRAME_STEP
     key = video_key(path)
     out = os.path.join(FRAMES, f"{key}-{at:05d}.jpg")
@@ -498,9 +655,15 @@ def configured_image(data, c):
     video), o None si usa presentación u otro plugin."""
     plugin = wallpaper_plugin(data, c)
     live["video"] = plugin == VIDEO_PLUGIN
+    if plugin != VIDEO_PLUGIN:
+        last_segment["seg"] = None
     if plugin == VIDEO_PLUGIN:
         path = current_video(data, c)
-        # los colores siguen al video: fotograma del momento que se ve (o uno fijo si esta en pausa)
+        seg = video_segment(path) if path else None
+        last_segment["seg"] = seg
+        if seg:
+            return seg["frame"]
+        # aun sin preparar: fotograma del momento que se ve (o uno fijo si esta en pausa)
         return video_frame(path, video_position(path) if path else None)
     if plugin != "org.kde.image":
         return None  # en presentación Plasma no expone la imagen actual
@@ -695,6 +858,29 @@ _cache = {"key": None, "img": None}
 _results = {}  # resultados ya calculados; se vacía solo cuando cambia la imagen
 
 
+_next_img = {}
+last_segment = {"seg": None}
+
+
+def colors_for(img, imgkey, endpoint, n, l, r, t, b, swap):
+    """Colores de una imagen para un endpoint, en cache por imagen y parametros."""
+    key = (imgkey, endpoint, n, l, r, t, b, swap)
+    if key not in _results:
+        if len(_results) > 64:
+            _results.clear()
+        if endpoint == "/palette":
+            _results[key] = palette(img)
+        elif endpoint == "/zones":
+            cols = zones(img, n, l, r)
+            _results[key] = swap_colors(cols, img) if swap else cols
+        elif endpoint == "/auto":
+            _results[key] = auto_colors(img, n, l, r, t, b, swap)
+        else:
+            # En contraste no se intercambia: invertir deshace el contraste
+            _results[key] = contrast_bright(img, n, l, r, t, b)
+    return _results[key]
+
+
 def cached(params, compute):
     key = (_cache["key"],) + params
     if key not in _results:
@@ -726,6 +912,13 @@ def load_image(cid, aspect):
         return None
     key = (path, os.path.getmtime(path), round(aspect, 3), fill)
     if _cache["key"] != key:  # solo se recarga si cambia el wallpaper, la pantalla o el modo
+        _cache.update(key=key, img=open_image(path, aspect, fill))
+    return _cache["img"]
+
+
+def open_image(path, aspect, fill):
+    """Imagen lista para calcular colores: reducida y recortada como la muestra Plasma."""
+    if True:
         img = Image.open(path).convert("RGB")
         img.thumbnail((600, 600))
         if fill == 2 and aspect > 0:
@@ -739,8 +932,7 @@ def load_image(cid, aspect):
                 nh = int(w / aspect)
                 y = (h - nh) // 2
                 img = img.crop((0, y, w, y + nh))
-        _cache.update(key=key, img=img)
-    return _cache["img"]
+        return img
 
 
 def vividness(rgb):
@@ -1035,32 +1227,34 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 log(f"Config de rotación inválida: {e}")
         elif url.path in ("/palette", "/zones", "/contrast", "/auto"):
-            colors = []
+            colors, extra = [], {}
             try:
-                img = load_image(q.get("cid", "-1"), float(q.get("aspect", 0)))
+                aspect = float(q.get("aspect", 0))
+                img = load_image(q.get("cid", "-1"), aspect)
                 if img is not None:
                     n = int(q.get("n", bars))
                     # Redondeo: mover el widget 1 px no debe invalidar el caché
                     l, r = round(float(q.get("l", 0)), 3), round(float(q.get("r", 1)), 3)
                     t, b = round(float(q.get("t", 0)), 3), round(float(q.get("b", 1)), 3)
                     swap = q.get("swap", "0") == "1"
-                    if url.path == "/palette":
-                        colors = cached(("palette",), lambda: palette(img))
-                    elif url.path == "/zones":
-                        def compute():
-                            cols = zones(img, n, l, r)
-                            return swap_colors(cols, img) if swap else cols
-                        colors = cached(("zones", n, l, r, swap), compute)
-                    elif url.path == "/auto":
-                        colors = cached(("auto", n, l, r, t, b, swap),
-                                        lambda: auto_colors(img, n, l, r, t, b, swap))
-                    else:
-                        # En contraste no se intercambia: invertir deshace el contraste
-                        colors = cached(("contrast", n, l, r, t, b),
-                                        lambda: contrast_bright(img, n, l, r, t, b))
+                    args = (url.path, n, l, r, t, b, swap)
+                    colors = colors_for(img, _cache["key"], *args)
+                    # Fondo de video preparado: tambien los colores del siguiente tramo y cuanto
+                    # falta, para que el widget cambie justo en el corte (sin esperar otra consulta)
+                    seg = last_segment.get("seg")
+                    if live["video"] and seg and seg["next"] and seg["in"] is not None and seg["in"] < 4000:
+                        fill = 2
+                        nkey = (seg["next"], round(aspect, 3), fill)
+                        nimg = _next_img.get(nkey)
+                        if nimg is None:
+                            _next_img.clear()
+                            nimg = _next_img[nkey] = open_image(seg["next"], aspect, fill)
+                        extra = {"next": colors_for(nimg, nkey, *args), "in": seg["in"]}
             except Exception as e:
                 log(f"Error al leer colores del wallpaper: {e}")
-            return self.send(json.dumps({"colors": colors, "live": live["video"]}).encode(), "application/json")
+            return self.send(json.dumps({"colors": colors, "live": live["video"], **extra}).encode(),
+                             "application/json")
+
 
         # "D" (apagado a mano) y "P" (pausa) le avisan al widget que oculte las barras
         # y consulte menos seguido

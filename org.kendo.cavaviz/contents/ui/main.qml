@@ -195,14 +195,52 @@ PlasmoidItem {
     function syncTerminal() { get("terminal?pause=" + (terminalPause ? 1 : 0), null) }
     onTerminalPauseChanged: syncTerminal()
 
-    function applyColors(t) {
-        if (!t) return
-        var res = JSON.parse(t)
-        root.liveVideo = !!res.live
-        var c = res.colors
+    function setZoneColors(c) {
         // Lista vacía = el puente no sabe qué imagen hay (ej. presentación de Plasma): se usa el accent
         zoneColors = (c.length === barCount) ? c : []
     }
+    function setSecondColor(c) {
+        if (c.length === 0) return
+        // De los colores vivos del wallpaper, el más distinto al accent (que ya cubre los graves)
+        var best = c[0], bestD = -1
+        for (var i = 0; i < Math.min(c.length, 5); i++) {
+            var dr = c[i][0] / 255 - root.baseColor.r
+            var dg = c[i][1] / 255 - root.baseColor.g
+            var db = c[i][2] / 255 - root.baseColor.b
+            var d = dr * dr + dg * dg + db * db
+            if (d > bestD) { bestD = d; best = c[i] }
+        }
+        root.wallSecond = Qt.rgba(best[0] / 255, best[1] / 255, best[2] / 255, 1)
+    }
+    // Fondo de video preparado: el puente manda tambien los colores del siguiente tramo y en
+    // cuantos ms empieza; se programa el cambio para ese momento (no se espera a otra consulta)
+    property var nextColors: null
+    property var nextApply: null
+    function applyResponse(t, apply) {
+        if (!t) return
+        var res = JSON.parse(t)
+        root.liveVideo = !!res.live
+        if (res.next && res.in !== undefined && res.in < 150) {
+            apply(res.next)                 // el corte es ya: evita volver un instante al color anterior
+            nextSwitch.stop()
+            return
+        }
+        apply(res.colors)
+        if (res.next && res.in !== undefined) {
+            root.nextColors = res.next
+            root.nextApply = apply
+            nextSwitch.interval = Math.max(1, res.in)
+            nextSwitch.restart()
+        } else {
+            nextSwitch.stop()
+        }
+    }
+    Timer {
+        id: nextSwitch
+        repeat: false
+        onTriggered: if (root.nextColors && root.nextApply) root.nextApply(root.nextColors)
+    }
+    function applyColors(t) { applyResponse(t, setZoneColors) }
 
     function fetchColors() {
         var cid = Plasmoid.containment ? Plasmoid.containment.id : -1
@@ -218,23 +256,7 @@ PlasmoidItem {
             get("auto?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
                 + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
         } else {
-            get("palette?" + common, function (t) {
-                if (!t) return
-                var res = JSON.parse(t)
-                root.liveVideo = !!res.live
-                var c = res.colors
-                if (c.length === 0) return
-                // De los colores vivos del wallpaper, el más distinto al accent (que ya cubre los graves)
-                var best = c[0], bestD = -1
-                for (var i = 0; i < Math.min(c.length, 5); i++) {
-                    var dr = c[i][0] / 255 - root.baseColor.r
-                    var dg = c[i][1] / 255 - root.baseColor.g
-                    var db = c[i][2] / 255 - root.baseColor.b
-                    var d = dr * dr + dg * dg + db * db
-                    if (d > bestD) { bestD = d; best = c[i] }
-                }
-                root.wallSecond = Qt.rgba(best[0] / 255, best[1] / 255, best[2] / 255, 1)
-            })
+            get("palette?" + common, function (t) { root.applyResponse(t, root.setSecondColor) })
         }
     }
 
