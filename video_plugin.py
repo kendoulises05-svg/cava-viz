@@ -107,17 +107,26 @@ def remove():
 
 
 def ensure(log=print):
-    """Al arrancar el puente: rehace la copia si el plugin del sistema cambio. Nunca la crea si
-    no existe (eso lo hace install.sh)."""
+    """Deja la copia lista sin que el usuario haga nada: la crea si falta y la rehace si el plugin
+    del sistema cambio. Si el aviso ya no encaja con la version nueva, la quita (queda el plugin
+    original). No toca una copia que no sea de cava-viz. Devuelve True si escribio una copia
+    nueva (Plasma necesita recargar el fondo para usarla)."""
+    if not os.path.isdir(SYSTEM):
+        return False
     st = status()
-    if not st["ours"] or not st["stale"]:
-        return
+    if st["installed"] and not st["ours"]:
+        return False
+    if st["installed"] and not st["stale"]:
+        return False
     try:
         install()
-        log("Plugin de video actualizado: copia de cava-viz rehecha (recarga Plasma para usarla)")
+        log("Copia del plugin de video " + ("rehecha (el plugin se actualizo)" if st["installed"] else "creada"))
+        return True
     except (OSError, RuntimeError) as e:
-        remove()
-        log(f"Plugin de video actualizado y el aviso ya no encaja ({e}); se quito la copia de cava-viz")
+        if st["installed"]:
+            remove()
+        log(f"No se pudo preparar la copia del plugin de video ({e}); se usa el plugin original")
+        return False
 
 
 if __name__ == "__main__":

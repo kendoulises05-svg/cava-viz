@@ -582,6 +582,67 @@ def _prune_timelines():
         shutil.rmtree(d, ignore_errors=True)
 
 
+# ---------------- copia del plugin de video: automatica ----------------
+WATCH_EVERY = 10        # segundos entre revisiones
+SILENT_RELOAD = 15      # fondo de video sin aviso del plugin durante esto => recargar el fondo
+_reloaded_for = set()   # pid de plasmashell en el que ya se recargo el fondo (una vez por sesion)
+
+
+def reload_video_wallpaper():
+    """Recarga el plugin de los escritorios con fondo de video para que Plasma use la copia
+    nueva, sin reiniciar el escritorio: lo cambia a imagen y, 1,5 s despues, vuelve al de video
+    (en un mismo script Plasma ignora el cambio). La config del video se conserva."""
+    if not QDBUS:
+        return False
+    run = lambda js: subprocess.run([QDBUS, "org.kde.plasmashell", "/PlasmaShell",
+                                     "org.kde.PlasmaShell.evaluateScript", js],
+                                    capture_output=True, text=True, timeout=15)
+    r = run("var ids = []; desktops().forEach(function (d) {"
+            f" if (d.wallpaperPlugin === {json.dumps(VIDEO_PLUGIN)}) {{ ids.push(d.id); d.wallpaperPlugin = 'org.kde.image'; }}"
+            "}); print(ids.join(','));")
+    ids = [int(x) for x in r.stdout.strip().split(",") if x.strip().isdigit()]
+    if not ids:
+        return False
+    time.sleep(1.5)
+    for attempt in range(3):     # volver al video siempre, aunque el primer intento falle
+        r = run(f"var ids = {json.dumps(ids)}; desktops().forEach(function (d) {{"
+                f" if (ids.indexOf(d.id) >= 0) d.wallpaperPlugin = {json.dumps(VIDEO_PLUGIN)}; }});")
+        if r.returncode == 0:
+            return True
+        time.sleep(1)
+    log(f"No se pudo volver al fondo de video tras recargarlo: {r.stdout.strip() or r.stderr.strip()}")
+    return False
+
+
+def plugin_watch_loop():
+    """Sin comandos del usuario: mantiene la copia del plugin y que Plasma la use."""
+    try:
+        import video_plugin
+    except ImportError as e:
+        log(f"No se encontro video_plugin.py ({e}): colores del video aproximados")
+        return
+    started = time.monotonic()
+    while True:
+        try:
+            written = video_plugin.ensure(log)
+            data = read_appletsrc()
+            c = find_containment(data, -1)
+            is_video = c is not None and wallpaper_plugin(data, c) == VIDEO_PLUGIN
+            pid = _plasmashell_pid()
+            # silencio desde el ultimo aviso (o desde que arranco el puente: la lista empieza vacia)
+            last = max([r["at"] for r in reports.values()] + [started])
+            silent = time.monotonic() - last > SILENT_RELOAD
+            ours = video_plugin.status()["ours"]
+            if is_video and ours and pid and (written or (silent and playing_videos() and pid not in _reloaded_for)):
+                _reloaded_for.add(pid)
+                ok = reload_video_wallpaper()
+                log("Fondo de video recargado para usar la copia del plugin" if ok
+                    else "No habia fondo de video que recargar")
+        except Exception as e:
+            log(f"Error vigilando el plugin de video: {e}")
+        time.sleep(WATCH_EVERY)
+
+
 def prepare_loop():
     """Prepara en segundo plano el video que se esta viendo (una vez por video)."""
     # al arrancar: tramos de videos preparados con una version anterior (barato: solo compara)
@@ -1336,12 +1397,8 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-try:
-    import video_plugin
-    video_plugin.ensure(log)
-except Exception as e:
-    log(f"No se pudo revisar la copia del plugin de video: {e}")
 threading.Thread(target=cava_loop, daemon=True).start()
+threading.Thread(target=plugin_watch_loop, daemon=True).start()
 threading.Thread(target=rotation_loop, daemon=True).start()
 threading.Thread(target=lock_loop, daemon=True).start()
 threading.Thread(target=terminal_loop, daemon=True).start()
