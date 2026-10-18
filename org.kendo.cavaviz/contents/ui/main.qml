@@ -216,6 +216,21 @@ PlasmoidItem {
         return out.length ? out : [baseColor, wallSecond]
     }
 
+    function luminance(c) {
+        function lin(v) { return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    function contrast(la, lb) { return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05) }
+    // La barra o su versión casi negra (con un poco del tono; un gris queda negro): la que más se
+    // distinga del fondo. Se cambia de golpe y no mezclando: un color a medio camino quedaría del
+    // mismo gris que el fondo.
+    function readable(c, bgRgb) {
+        var lb = luminance(rgb(bgRgb))
+        var dark = Qt.hsva(c.hsvHue < 0 ? 0 : c.hsvHue, c.hsvSaturation, 0.14, 1)
+        // 1.3: con contraste parecido se queda el color original
+        return contrast(luminance(dark), lb) > 1.3 * contrast(luminance(c), lb) ? dark : c
+    }
+
     function recomputeColors() {
         var n = barCount, cols = [], i
         // Dos colores: los que eligió el usuario, o el acento de Plasma y el color del fondo
@@ -234,6 +249,17 @@ PlasmoidItem {
             else if (colorStyle === 4) cols.push(Qt.rgba(fixedColor.r, fixedColor.g, fixedColor.b, 1))
             // Dos colores (y por zona mientras llegan los colores): el primero sigue a los graves
             else cols.push(mix(lowTwo, highTwo, bassT(i) * colorBlend))
+        }
+        // Modos que salen del fondo: si una barra casi no se distingue de lo que tiene detrás
+        // (fondo claro o blanco), pasa a casi negro conservando el tono.
+        var fromWall = colorStyle <= 3 && !(colorStyle === 0 && twoColorsCustom)
+        if (fromWall && wallBg.length === n) {
+            for (i = 0; i < n; i++) cols[i] = readable(cols[i], wallBg[i])
+            if (colorStyle === 3) {   // intensidad: el degradado vertical usa dos colores para todas
+                var mid = wallBg[Math.floor(n / 2)]
+                lowColor = readable(lowColor, mid)
+                highColor = readable(highColor, mid)
+            }
         }
         barColors = cols
         var ws = []
@@ -320,6 +346,16 @@ PlasmoidItem {
     // Fondo de video preparado: el puente manda tambien los colores del siguiente tramo y en
     // cuantos ms empieza; se programa el cambio para ese momento (no se espera a otra consulta)
     property var nextColors: null
+    property var nextBg: null
+    // Fondo detrás de cada barra [[r,g,b], ...] (lo manda el puente): para no dejar barras claras
+    // sobre un fondo claro (o blanco), que no se ven
+    property var wallBg: []
+    function setBg(b) {
+        if (b && b.length === barCount && JSON.stringify(b) !== JSON.stringify(wallBg)) {
+            wallBg = b
+            glowDebounce.restart()
+        }
+    }
     property var nextApply: null
     function applyResponse(t, apply) {
         if (!t) return
@@ -328,12 +364,15 @@ PlasmoidItem {
         if (!res || !res.colors) return
         root.liveVideo = !!res.live
         if (res.next && res.in !== undefined && res.in < 150) {
+            setBg(res.next_bg)
             apply(res.next)                 // el corte es ya: evita volver un instante al color anterior
             nextSwitch.stop()
             return
         }
+        setBg(res.bg)
         apply(res.colors)
         if (res.next && res.in !== undefined) {
+            root.nextBg = res.next_bg || null
             root.nextColors = res.next
             root.nextApply = apply
             nextSwitch.interval = Math.max(1, res.in)
@@ -345,7 +384,7 @@ PlasmoidItem {
     Timer {
         id: nextSwitch
         repeat: false
-        onTriggered: if (root.nextColors && root.nextApply) root.nextApply(root.nextColors)
+        onTriggered: if (root.nextColors && root.nextApply) { root.setBg(root.nextBg); root.nextApply(root.nextColors) }
     }
     function applyColors(t) { applyResponse(t, setZoneColors) }
 
@@ -353,6 +392,7 @@ PlasmoidItem {
         var cid = Plasmoid.containment ? Plasmoid.containment.id : -1
         var common = "cid=" + cid + "&aspect=" + screenAspect.toFixed(4)
         var span = "n=" + barCount + "&l=" + areaLeft.toFixed(4) + "&r=" + areaRight.toFixed(4)
+                   + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
         if (colorStyle === 4 || colorStyle === 5 || (colorStyle === 0 && twoColorsCustom)) {
             // Color fijo, paleta y dos colores elegidos no dependen del fondo
             liveVideo = false
@@ -360,7 +400,7 @@ PlasmoidItem {
         } else if (colorStyle === 1) {
             get("zones?" + span + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
         } else {
-            get("palette?" + common, function (t) { root.applyResponse(t, root.setWallColors) })
+            get("palette?" + span + "&" + common, function (t) { root.applyResponse(t, root.setWallColors) })
         }
     }
 

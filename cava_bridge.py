@@ -9,6 +9,7 @@ Endpoints (solo 127.0.0.1):
   /bars?n=N&ch=stereo|mono&fps=F      cambia barras, canales y frames por segundo, y reinicia cava
   (apagado a mano, "/" responde "D"; en pausa por ventana o bloqueo, responde "P")
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
+  (las dos responden también "bg": el color del fondo detrás de cada barra, con n, l, r, t, b)
   /zones?n=&l=&r=&swap=&aspect=&cid=  un color por barra según la columna del wallpaper, siempre
                                       vivo y claro; swap=1 intercambia esos colores (JSON)
   /rotation?enabled=&dir=&seconds=&order=    config de la rotación (la manda el widget)
@@ -1002,6 +1003,8 @@ def colors_for(img, imgkey, endpoint, n, l, r, t, b, swap):
             _results.clear()
         if endpoint == "/palette":
             _results[key] = palette(img)
+        elif endpoint == "/bg":
+            _results[key] = area_colors(img, n, l, r, t, b)
         else:
             cols = zones(img, n, l, r)
             _results[key] = [vivid(c) for c in swap_colors(cols, img)] if swap else cols
@@ -1075,6 +1078,16 @@ def boost(rgb, min_v=0.6):
         s *= min(1.0, v / 0.3)
     r, g, b = colorsys.hsv_to_rgb(h, s, max(v, min_v))
     return [round(r * 255), round(g * 255), round(b * 255)]
+
+
+def area_colors(img, n, left, right, top, bottom):
+    """Color promedio del fondo detrás de cada barra (solo el área del widget). El widget lo usa
+    para oscurecer las barras que no se distinguirían (fondo muy claro o blanco)."""
+    w, h = img.size
+    x0, y0 = int(left * w), int(top * h)
+    x1, y1 = max(x0 + 1, int(right * w)), max(y0 + 1, int(bottom * h))
+    cells = img.crop((x0, y0, x1, y1)).resize((n, 1), Image.Resampling.BOX).load()
+    return smooth([list(cells[i, 0]) for i in range(n)])
 
 
 def vivid(rgb):
@@ -1293,7 +1306,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return self.send(b"ok")
         elif url.path in ("/palette", "/zones"):
-            colors, extra = [], {}
+            colors, bg, extra = [], [], {}
             try:
                 aspect = float(q.get("aspect", 0))
                 img = load_image(q.get("cid", "-1"), aspect)
@@ -1305,6 +1318,7 @@ class Handler(BaseHTTPRequestHandler):
                     swap = q.get("swap", "0") == "1"
                     args = (url.path, n, l, r, t, b, swap)
                     colors = colors_for(img, _cache["key"], *args)
+                    bg = colors_for(img, _cache["key"], "/bg", *args[1:])
                     # Fondo de video preparado: tambien los colores del siguiente tramo y cuanto
                     # falta, para que el widget cambie justo en el corte (sin esperar otra consulta)
                     seg = last_segment.get("seg")
@@ -1315,10 +1329,11 @@ class Handler(BaseHTTPRequestHandler):
                         if nimg is None:
                             _next_img.clear()
                             nimg = _next_img[nkey] = open_image(seg["next"], aspect, fill)
-                        extra = {"next": colors_for(nimg, nkey, *args), "in": seg["in"]}
+                        extra = {"next": colors_for(nimg, nkey, *args), "in": seg["in"],
+                                 "next_bg": colors_for(nimg, nkey, "/bg", *args[1:])}
             except Exception as e:
                 log(f"Error al leer colores del wallpaper: {e}")
-            return self.send(json.dumps({"colors": colors, "live": live["video"], **extra}).encode(),
+            return self.send(json.dumps({"colors": colors, "bg": bg, "live": live["video"], **extra}).encode(),
                              "application/json")
 
 
