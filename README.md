@@ -41,6 +41,7 @@ Every wallpaper-based mode also follows a video wallpaper. On a very light or wh
 - Rotation from a folder: random, alphabetical or newest first, with an interval in hours, minutes and seconds.
 - "Next wallpaper" from the widget right-click menu or a keyboard shortcut.
 - Reuses the folder and excluded images from the Plasma slideshow settings.
+- **we-fetch shortcuts in the right-click menu:** when we-fetch manages the desktop background, the widget menu also has "Background: videos and images / only videos / only images" and "Mute background" (the bridge reads we-fetch's files and runs `we-fetch desktop show|mute`; endpoint `/wefetch`).
 - **we-fetch image turns:** if [we-fetch](https://github.com/kendoulises05-svg/we-fetch) alternates images and videos on the desktop (its `we-fetch-desktop-turns` service), Cava Viz does not rotate images on top, and "Next wallpaper" asks we-fetch for the next turn.
 - **Video wallpaper** (Smart Video Wallpaper Reborn plugin, the one [we-fetch](https://github.com/kendoulises05-svg/we-fetch) sets): colors come from a frame of the video being shown (found from the file plasmashell has open; via ffmpeg, cached in `~/.cache/cava-viz/frames`) and "Next wallpaper" moves the plugin to its next video. While the wallpaper is a video, timed rotation never puts an image over it: the plugin rotates its own videos.
 

@@ -14,6 +14,7 @@ Endpoints (solo 127.0.0.1):
                                       vivo y claro; swap=1 intercambia esos colores (JSON)
   /rotation?enabled=&dir=&seconds=&order=    config de la rotación (la manda el widget)
   /next                               cambia al siguiente wallpaper
+  /wefetch[?show=all|videos|images|?mute=toggle]   atajos de la presentacion de we-fetch (JSON)
   /videopos?f=&t=&d=&p=               posicion exacta del fondo de video (la manda la copia del
                                       plugin, video_plugin.py); sin parametros: lo ultimo recibido
 """
@@ -882,6 +883,44 @@ def we_fetch_turns():
     return os.path.isfile(WE_FETCH_TURNS_UNIT)
 
 
+WE_FETCH_CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "we-fetch")
+
+
+def we_fetch_exe():
+    # el servicio puede no tener ~/.local/bin (pipx) en el PATH
+    return shutil.which("we-fetch") or next((p for p in [os.path.expanduser("~/.local/bin/we-fetch")]
+                                             if os.path.isfile(p)), None)
+
+
+def we_fetch_status():
+    """Para el menu del widget: si we-fetch maneja el escritorio, que muestra y si esta en silencio.
+    Se lee de sus archivos (sin lanzar we-fetch en cada consulta)."""
+    active = os.path.isfile(os.path.join(WE_FETCH_CONFIG, "desktop-applied.json"))
+    if not active or not we_fetch_exe():
+        return {"available": False}
+    try:
+        with open(os.path.join(WE_FETCH_CONFIG, "screens.json"), encoding="utf-8") as f:
+            d = json.load(f).get("desktop") or {}
+    except (OSError, ValueError):
+        d = {}
+    return {"available": True, "show": d.get("show") or "all", "muted": not d.get("audio", False)}
+
+
+def we_fetch_quick(q):
+    """/wefetch?show=all|videos|images o ?mute=toggle: se lo pide a we-fetch (lo guarda y lo pone)."""
+    exe = we_fetch_exe()
+    if exe:
+        if q.get("show") in ("all", "videos", "images"):
+            args = ["show", q["show"]]
+        elif q.get("mute") in ("on", "off", "toggle"):
+            args = ["mute", q["mute"]]
+        else:
+            return
+        r = subprocess.run([exe, "desktop", *args], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            log(f"we-fetch desktop {' '.join(args)} fallo | {r.stderr.strip()[-200:]}")
+
+
 def rotation_step():
     """Revisa si toca cambiar el wallpaper. Devuelve cuántos segundos esperar."""
     state = load_state()
@@ -896,8 +935,7 @@ def rotation_step():
         if rotate_now.is_set():
             rotate_now.clear()
             # el servicio puede no tener ~/.local/bin (pipx) en el PATH
-            exe = shutil.which("we-fetch") or next((p for p in [os.path.expanduser("~/.local/bin/we-fetch")]
-                                                     if os.path.isfile(p)), None)
+            exe = we_fetch_exe()
             if exe:
                 r = subprocess.run([exe, "desktop", "turns-next"], capture_output=True, text=True, timeout=30)
                 log("we-fetch: siguiente turno" if r.returncode == 0 else f"we-fetch turns-next fallo | {r.stderr.strip()[-200:]}")
@@ -1281,6 +1319,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"off" if "manual" in pause_reasons else b"on")
         elif url.path == "/bars":
             set_audio(int(q.get("n", bars)), q.get("ch", channels), int(q.get("fps", fps)))
+        elif url.path == "/wefetch":
+            if q:
+                we_fetch_quick(q)
+            return self.send(json.dumps(we_fetch_status()).encode(), "application/json")
         elif url.path == "/next":
             # Sin filtro de tiempo: la rotación aplica un cambio a la vez, así que los clics
             # que lleguen mientras Plasma aplica uno se juntan en un solo "siguiente"

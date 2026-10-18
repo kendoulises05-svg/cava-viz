@@ -61,6 +61,7 @@ Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config c
 | `/bars?n=&ch=&fps=` | Barras, `stereo`/`mono` y fps; reinicia cava |
 | `/next` | Siguiente wallpaper |
 | `/rotation?enabled=&dir=&seconds=&order=` | Config de rotación (estado en `~/.local/state/cava-viz/rotation.json`) |
+| `/wefetch[?show=&mute=]` | Atajos de la presentacion de we-fetch (lee sus archivos; ejecuta `we-fetch desktop show/mute`) |
 | `/palette`, `/zones` | Colores del wallpaper (JSON). Contraste y automático se quitaron el 2026-10-18 |
 
 ### Sistema de pausa actual (importante para las tareas)

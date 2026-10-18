@@ -116,10 +116,50 @@ PlasmoidItem {
         PlasmaCore.Action {
             text: "Siguiente wallpaper"
             icon.name: "go-next"
-            visible: root.rotationEnabled
+            visible: root.rotationEnabled || root.wefetch.available
             onTriggered: root.get("next", null)
+        },
+        // Atajos de we-fetch (solo si we-fetch maneja el fondo del escritorio)
+        PlasmaCore.Action {
+            isSeparator: true
+            visible: root.wefetch.available
+        },
+        PlasmaCore.Action {
+            text: "Fondo: videos e imágenes"
+            checkable: true
+            checked: root.wefetch.show === "all"
+            visible: root.wefetch.available
+            onTriggered: root.wefetchDo("show=all")
+        },
+        PlasmaCore.Action {
+            text: "Fondo: solo videos"
+            checkable: true
+            checked: root.wefetch.show === "videos"
+            visible: root.wefetch.available
+            onTriggered: root.wefetchDo("show=videos")
+        },
+        PlasmaCore.Action {
+            text: "Fondo: solo imágenes"
+            checkable: true
+            checked: root.wefetch.show === "images"
+            visible: root.wefetch.available
+            onTriggered: root.wefetchDo("show=images")
+        },
+        PlasmaCore.Action {
+            text: root.wefetch.muted ? "Activar sonido del fondo" : "Silenciar el fondo"
+            icon.name: root.wefetch.muted ? "audio-volume-high" : "audio-volume-muted"
+            visible: root.wefetch.available
+            onTriggered: root.wefetchDo("mute=toggle")
         }
     ]
+
+    // we-fetch: {available, show, muted}; el puente lo lee de los archivos de we-fetch
+    property var wefetch: ({ available: false })
+    function wefetchRead(t) {
+        if (!t) return
+        try { root.wefetch = JSON.parse(t) } catch (e) { }
+    }
+    function wefetchDo(query) { get("wefetch?" + query, wefetchRead) }
 
     // Atajo de teclado: Configure > Keyboard Shortcuts del widget
     Connections {
@@ -691,6 +731,7 @@ PlasmoidItem {
                 root.fetchColors()
                 root.syncRotation()
                 root.syncTerminal()
+                root.get("wefetch", root.wefetchRead)
                 // Si el puente se reinició volvió a las barras/fps de raw.conf: se reenvían
                 // (el puente no reinicia cava si ya coinciden). No durante un ajuste de tamaño.
                 if (!barsDebounce.running) barsDebounce.restart()
