@@ -35,7 +35,7 @@ Un widget visualizador de audio para el escritorio de KDE Plasma 6. Dibuja barra
 | Color fijo | Un color que eliges tú |
 | Paleta | Una paleta lista (Neón, Atardecer, Océano, Fuego, Bosque, Hielo, Pastel, Arcoíris) o la tuya (de 2 a 6 colores), de graves a agudos |
 
-Todos los modos que usan el wallpaper también siguen a un fondo de video. Sobre un fondo muy claro o blanco, las barras que no se distinguirían se oscurecen: una de color solo lo justo para verse (mismo tono) y una gris pasa a negro: el puente manda también el color del fondo detrás de cada barra.
+Todos los modos que usan el wallpaper también siguen a un fondo de video. Sobre un fondo muy claro o blanco, las barras que no se distinguirían se oscurecen: una de color solo lo justo para verse (mismo tono) y una gris sigue un degradado de blanco a negro según lo claro del fondo (blanco, plata, gris, negro): el puente manda también el color del fondo detrás de cada barra.
 
 **Wallpaper**
 - Rotación desde una carpeta: aleatorio, alfabético o más recientes primero, con intervalo en horas, minutos y segundos.

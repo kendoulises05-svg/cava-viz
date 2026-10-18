@@ -226,12 +226,19 @@ PlasmoidItem {
     // queda su color: elegir siempre "la que más contrasta" volvía negras barras que se veían bien.
     function readable(c, bgRgb) {
         var lb = luminance(rgb(bgRgb))
+        // Barra gris (fondo sin color): degradado blanco -> plata -> gris -> negro según lo claro que
+        // sea el fondo detrás. La transición es ancha a propósito: el tramo en que la barra queda
+        // del mismo gris que el fondo es corto (el glow la sigue marcando).
+        if (c.hsvSaturation < 0.15) {
+            var x = Math.max(0, Math.min(1, (lb - 0.15) / 0.4))
+            var t = x * x * (3 - 2 * x)                          // suave en los extremos
+            return Qt.hsva(0, 0, c.hsvValue + (0.1 - c.hsvValue) * t, 1)
+        }
         if (lb < 0.4) return c                                   // fondo oscuro o medio
         if (contrast(luminance(c), lb) >= 1.6) return c          // ya se distingue
         // Se baja el brillo lo justo para llegar a 2.5:1 (queda del mismo tono, más oscuro y algo
         // más saturado); si ni así, casi negra
         var h = c.hsvHue < 0 ? 0 : c.hsvHue, sat = Math.min(1, c.hsvSaturation * 1.2)
-        if (sat < 0.15) return Qt.hsva(0, 0, 0.12, 1)              // barra gris sobre fondo claro: negra
         for (var v = c.hsvValue - 0.05; v > 0.14; v -= 0.05) {
             var d = Qt.hsva(h, sat, v, 1)
             if (contrast(luminance(d), lb) >= 2.5) return d

@@ -35,7 +35,7 @@ An audio visualizer widget for the KDE Plasma 6 desktop. It draws thin, reactive
 | Fixed color | One color you pick |
 | Palette | A ready-made palette (Neon, Sunset, Ocean, Fire, Forest, Ice, Pastel, Rainbow) or your own (2 to 6 colors), spread from bass to treble |
 
-Every wallpaper-based mode also follows a video wallpaper. On a very light or white background, bars that would not stand out get darker: a colored bar only as much as needed to stand out (same hue), a gray bar turns black: the bridge also sends the background color behind each bar.
+Every wallpaper-based mode also follows a video wallpaper. On a very light or white background, bars that would not stand out get darker: a colored bar only as much as needed to stand out (same hue), a gray bar follows a gradient from white to black as the background gets lighter (white, silver, gray, black): the bridge also sends the background color behind each bar.
 
 **Wallpaper**
 - Rotation from a folder: random, alphabetical or newest first, with an interval in hours, minutes and seconds.
