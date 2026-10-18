@@ -889,6 +889,19 @@ def rotation_step():
     c = find_containment(data, -1)
     if c is None:
         return 60
+    if we_fetch_turns():
+        # we-fetch hace la presentacion del escritorio (videos e imagenes, un elemento a la vez):
+        # no se rota encima y "Siguiente wallpaper" le pide a we-fetch el siguiente. Va antes que el
+        # caso de video: el plugin solo tiene el video actual y no sabria pasar al siguiente
+        if rotate_now.is_set():
+            rotate_now.clear()
+            # el servicio puede no tener ~/.local/bin (pipx) en el PATH
+            exe = shutil.which("we-fetch") or next((p for p in [os.path.expanduser("~/.local/bin/we-fetch")]
+                                                     if os.path.isfile(p)), None)
+            if exe:
+                r = subprocess.run([exe, "desktop", "turns-next"], capture_output=True, text=True, timeout=30)
+                log("we-fetch: siguiente turno" if r.returncode == 0 else f"we-fetch turns-next fallo | {r.stderr.strip()[-200:]}")
+        return 60
     if wallpaper_plugin(data, c) == VIDEO_PLUGIN:
         # Fondo de video: los videos los rota el plugin. Solo se atiende "Siguiente wallpaper"
         # (nunca se pone una imagen encima del video).
@@ -899,18 +912,6 @@ def rotation_step():
             if ok:
                 time.sleep(2)  # el plugin tarda un momento en guardar LastVideo
                 update_terminal_cava(configured_image(read_appletsrc(), c))
-        return 60
-    if we_fetch_turns():
-        # we-fetch turna imagenes y videos en el escritorio: no se rota encima; "Siguiente
-        # wallpaper" le pide a we-fetch el siguiente turno
-        if rotate_now.is_set():
-            rotate_now.clear()
-            # el servicio puede no tener ~/.local/bin (pipx) en el PATH
-            exe = shutil.which("we-fetch") or next((p for p in [os.path.expanduser("~/.local/bin/we-fetch")]
-                                                     if os.path.isfile(p)), None)
-            if exe:
-                r = subprocess.run([exe, "desktop", "turns-next"], capture_output=True, text=True, timeout=30)
-                log("we-fetch: siguiente turno" if r.returncode == 0 else f"we-fetch turns-next fallo | {r.stderr.strip()[-200:]}")
         return 60
     s = rotation_settings(state, data, c)
     if not s["enabled"]:
