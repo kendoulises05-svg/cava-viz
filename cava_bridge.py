@@ -872,6 +872,15 @@ def apply_wallpaper(path):
     return False, f"{detail} | D-Bus: {r2.stdout.strip() or r2.stderr.strip() or '-'}"
 
 
+WE_FETCH_TURNS_UNIT = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                                   "systemd", "user", "we-fetch-desktop-turns.service")
+
+
+def we_fetch_turns():
+    """we-fetch tiene activas las imagenes por turnos con los videos del escritorio."""
+    return os.path.isfile(WE_FETCH_TURNS_UNIT)
+
+
 def rotation_step():
     """Revisa si toca cambiar el wallpaper. Devuelve cuántos segundos esperar."""
     state = load_state()
@@ -889,6 +898,18 @@ def rotation_step():
             if ok:
                 time.sleep(2)  # el plugin tarda un momento en guardar LastVideo
                 update_terminal_cava(configured_image(read_appletsrc(), c))
+        return 60
+    if we_fetch_turns():
+        # we-fetch turna imagenes y videos en el escritorio: no se rota encima; "Siguiente
+        # wallpaper" le pide a we-fetch el siguiente turno
+        if rotate_now.is_set():
+            rotate_now.clear()
+            # el servicio puede no tener ~/.local/bin (pipx) en el PATH
+            exe = shutil.which("we-fetch") or next((p for p in [os.path.expanduser("~/.local/bin/we-fetch")]
+                                                     if os.path.isfile(p)), None)
+            if exe:
+                r = subprocess.run([exe, "desktop", "turns-next"], capture_output=True, text=True, timeout=30)
+                log("we-fetch: siguiente turno" if r.returncode == 0 else f"we-fetch turns-next fallo | {r.stderr.strip()[-200:]}")
         return 60
     s = rotation_settings(state, data, c)
     if not s["enabled"]:

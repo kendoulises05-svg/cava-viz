@@ -41,6 +41,7 @@ Todos los modos que usan el wallpaper también siguen a un fondo de video.
 - Rotación desde una carpeta: aleatorio, alfabético o más recientes primero, con intervalo en horas, minutos y segundos.
 - "Siguiente wallpaper" desde el menú de clic derecho del widget o con un atajo de teclado.
 - Reutiliza la carpeta y las imágenes excluidas de la configuración de presentación de Plasma.
+- **Turnos de imágenes de we-fetch:** si [we-fetch](https://github.com/kendoulises05-svg/we-fetch) turna imágenes y videos en el escritorio (su servicio `we-fetch-desktop-turns`), Cava Viz no rota imágenes encima y "Siguiente wallpaper" le pide a we-fetch el siguiente turno.
 - **Fondo de video** (plugin Smart Video Wallpaper Reborn, el que pone [we-fetch](https://github.com/kendoulises05-svg/we-fetch)): los colores salen de un fotograma del video que se está viendo (se sabe cuál por el archivo que tiene abierto plasmashell; con ffmpeg, en caché en `~/.cache/cava-viz/frames`) y "Siguiente wallpaper" pasa al siguiente video del plugin. Mientras el fondo sea video, la rotación por tiempo no pone imágenes encima: los videos los rota el plugin.
 
 **Consumo de recursos**
