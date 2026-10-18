@@ -221,14 +221,22 @@ PlasmoidItem {
         return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
     }
     function contrast(la, lb) { return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05) }
-    // La barra o su versión casi negra (con un poco del tono; un gris queda negro): la que más se
-    // distinga del fondo. Se cambia de golpe y no mezclando: un color a medio camino quedaría del
-    // mismo gris que el fondo.
+    // Solo si hace falta: fondo claro (o blanco) y la barra casi no se distingue de él. Entonces
+    // pasa a casi negra con un poco de su tono (un gris queda negro). En cualquier otro caso se
+    // queda su color: elegir siempre "la que más contrasta" volvía negras barras que se veían bien.
     function readable(c, bgRgb) {
         var lb = luminance(rgb(bgRgb))
-        var dark = Qt.hsva(c.hsvHue < 0 ? 0 : c.hsvHue, c.hsvSaturation, 0.14, 1)
-        // 1.3: con contraste parecido se queda el color original
-        return contrast(luminance(dark), lb) > 1.3 * contrast(luminance(c), lb) ? dark : c
+        if (lb < 0.4) return c                                   // fondo oscuro o medio
+        if (contrast(luminance(c), lb) >= 1.6) return c          // ya se distingue
+        // Se baja el brillo lo justo para llegar a 2.5:1 (queda del mismo tono, más oscuro y algo
+        // más saturado); si ni así, casi negra
+        var h = c.hsvHue < 0 ? 0 : c.hsvHue, sat = Math.min(1, c.hsvSaturation * 1.2)
+        if (sat < 0.15) return Qt.hsva(0, 0, 0.12, 1)              // barra gris sobre fondo claro: negra
+        for (var v = c.hsvValue - 0.05; v > 0.14; v -= 0.05) {
+            var d = Qt.hsva(h, sat, v, 1)
+            if (contrast(luminance(d), lb) >= 2.5) return d
+        }
+        return Qt.hsva(h, sat, 0.14, 1)
     }
 
     function recomputeColors() {
