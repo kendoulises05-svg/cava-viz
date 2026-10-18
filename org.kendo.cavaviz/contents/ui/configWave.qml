@@ -5,6 +5,8 @@ import org.kde.kirigami as Kirigami
 import org.kde.kcmutils as KCM
 
 KCM.SimpleKCM {
+    property alias cfg_shape: shape.currentIndex
+    property alias cfg_smoothing: smoothing.value
     property alias cfg_barWidth: barWidth.value
     property alias cfg_barGap: barGap.value
     property alias cfg_orientation: orientation.currentIndex
@@ -27,6 +29,18 @@ KCM.SimpleKCM {
 
         Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Forma" }
 
+        QQC2.ComboBox {
+            id: shape
+            Kirigami.FormData.label: "Estilo:"
+            model: ["Barras redondeadas", "Barras rectas", "Onda", "Circular"]
+        }
+
+        RowLayout {
+            Kirigami.FormData.label: "Movimiento suave:"
+            QQC2.Slider { id: smoothing; from: 0.0; to: 1.0; stepSize: 0.05 }
+            QQC2.Label { text: smoothing.value === 0 ? "Apagado" : Math.round(smoothing.value * 100) + "%" }
+        }
+
         RowLayout {
             Kirigami.FormData.label: "Grosor de barra:"
             QQC2.SpinBox { id: barWidth; from: 1; to: 20 }
@@ -47,19 +61,20 @@ KCM.SimpleKCM {
         QQC2.ComboBox {
             id: orientation
             Kirigami.FormData.label: "Orientación:"
+            enabled: shape.currentIndex !== 3   // el círculo no tiene orientación
             model: ["Desde abajo", "Espejo (con reflejo)", "Flotante (centrada)"]
         }
 
         RowLayout {
             Kirigami.FormData.label: "Línea del espejo:"
-            enabled: orientation.currentIndex === 1
+            enabled: orientation.currentIndex === 1 && shape.currentIndex !== 3
             QQC2.Slider { id: mirrorLine; from: 0.5; to: 0.95; stepSize: 0.05 }
             QQC2.Label { text: Math.round(mirrorLine.value * 100) + "% desde arriba" }
         }
 
         RowLayout {
             Kirigami.FormData.label: "Opacidad del reflejo:"
-            enabled: orientation.currentIndex === 1
+            enabled: orientation.currentIndex === 1 && shape.currentIndex !== 3
             QQC2.Slider { id: mirrorOpacity; from: 0.1; to: 1.0; stepSize: 0.05 }
             QQC2.Label { text: Math.round(mirrorOpacity.value * 100) + "%" }
         }
@@ -157,11 +172,11 @@ KCM.SimpleKCM {
 
         Item { Kirigami.FormData.isSection: true; Kirigami.FormData.label: "Comportamiento" }
 
-        QQC2.CheckBox { id: showPeaks; text: "Mostrar peaks" }
+        QQC2.CheckBox { id: showPeaks; text: "Mostrar peaks (solo barras)"; enabled: shape.currentIndex <= 1 }
 
         RowLayout {
             Kirigami.FormData.label: "Caída de peaks:"
-            enabled: showPeaks.checked
+            enabled: showPeaks.checked && shape.currentIndex <= 1
             QQC2.Slider { id: peakFall; from: 0.2; to: 3.0; stepSize: 0.1 }
             QQC2.Label { text: peakFall.value.toFixed(1) }
         }

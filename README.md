@@ -14,7 +14,9 @@ An audio visualizer widget for the KDE Plasma 6 desktop. It draws thin, reactive
 
 **Wave**
 - Bar count adjusts automatically to the widget width; you only choose bar width and gap in pixels.
-- Three orientations: from the bottom, mirror (with an adjustable reflection line) and floating (centered).
+- Four styles: rounded bars, square bars, wave (one smooth filled curve) and circular (bars around a circle).
+- Three orientations for bars and wave: from the bottom, mirror (with an adjustable reflection line) and floating (centered).
+- Smooth motion: an optional slider that eases the movement (rises faster than it falls, so beats still show).
 - Stereo or mono, with normal or inverted frequency layout.
 - Peak caps, hide on silence and smooth color transitions.
 - Glow that pulses with the bass, using the bar color or an automatic contrasting color.
@@ -23,10 +25,14 @@ An audio visualizer widget for the KDE Plasma 6 desktop. It draws thin, reactive
 
 | Mode | What it does |
 |---|---|
-| Accent + 2nd color | Bass uses the Plasma accent color; treble uses a vivid color taken from the wallpaper |
-| By wallpaper zone | Each bar takes the color of the wallpaper area it sits under. Optional color swap between zones |
-| Contrast | Same hue as the background behind the widget, with inverted brightness |
-| Automatic (experimental) | Zone color, darkened or lightened only as needed to reach a WCAG contrast ratio of 3:1 against the background |
+| Two colors | Bass uses the Plasma accent color; treble blends into the wallpaper color most different from it |
+| By wallpaper zone | Each bar takes the color of the wallpaper area it sits under, always bright and saturated enough to be seen. Optional color swap between zones |
+| Wallpaper gradient | The wallpaper's main colors (up to 4), spread from bass to treble |
+| By intensity | Low bars use one wallpaper color and tall bars another: the color rises with the volume |
+| Fixed color | One color you pick |
+| Palette | A ready-made palette (Neon, Sunset, Ocean, Fire, Forest, Ice, Pastel, Rainbow), spread from bass to treble |
+
+Every wallpaper-based mode also follows a video wallpaper.
 
 **Wallpaper**
 - Rotation from a folder: random, alphabetical or newest first, with an interval in hours, minutes and seconds.
@@ -74,12 +80,12 @@ Right-click the widget > **Configure Cava Viz**:
 
 | Page | Options |
 |---|---|
-| Wave | Bar width and gap, orientation, mirror line, audio channels and layout, glow, fps, pause when, pause with cava in a terminal, peaks, hide on silence |
-| Color | Color mode, accent blend, color swap between zones |
+| Wave | Style, smooth motion, bar width and gap, orientation, mirror line, audio channels and layout, glow, fps, pause when, pause with cava in a terminal, peaks, hide on silence |
+| Color | Color mode and its options (accent blend, color swap between zones, fixed color, palette) |
 | Wallpaper | Enable rotation, folder, order, interval, next wallpaper button |
 | Keyboard Shortcuts | Shortcut for "next wallpaper" |
 
-The zone, contrast and automatic modes need Cava Viz to control the wallpaper. If Plasma's own slideshow is active, the widget falls back to the accent color (see [Known limitations](#known-limitations)).
+The wallpaper-based modes (two colors, zone, gradient, intensity) need Cava Viz to control the wallpaper. If Plasma's own slideshow is active, the widget falls back to the accent color (see [Known limitations](#known-limitations)).
 
 ## How it works
 
@@ -112,7 +118,7 @@ Bridge endpoints, useful for scripting:
 | `/terminal?pause=1\|0` | Pause or not while another cava runs (sent by the widget) |
 | `/pause`, `/resume` | Pause or resume cava (used by the widget when a window covers it) |
 | `/bars?n=&ch=` | Bar count and `stereo` / `mono` |
-| `/palette`, `/zones`, `/contrast`, `/auto` | Wallpaper colors (JSON) |
+| `/palette`, `/zones` | Wallpaper colors (JSON) |
 | `/rotation?enabled=&dir=&seconds=&order=` | Rotation settings |
 
 To bind them to keyboard shortcuts: System Settings > Keyboard > Shortcuts > Add New > Command or Script, with one of these commands:
@@ -133,7 +139,23 @@ Measured on 2026-10-07 with [`tools/bench.sh`](tools/bench.sh): real 10 s averag
 | Turned off by hand | 8.5% | 0.0% | 0.0% | 8.5% |
 | Partial tiling with "Pause when: fullscreen or maximized" (no pause) | 32.9% | 1.9% | 3.4% | 38.2% |
 
-How to read it:
+Styles and modes, measured on 2026-10-18 (190 bars, 45 fps, glow, mirror, video wallpaper; the total includes the ~9% of the panel and other widgets):
+
+| Setting | plasmashell | Total |
+|---|---|---|
+| Rounded bars, by zone (reference) | 30.4–32.1% | 36.0–37.9% |
+| Wave | 31.5% | 37.3% |
+| Circular | 20.9% | 26.8% |
+| Bars, by intensity | 30.4–34.0% | 36.6–40.8% |
+| Wave, by intensity | 26.5% | 33.0% |
+| Bars, wallpaper gradient | 28.5% | 34.4% |
+| Bars, smooth motion 60% | 39.7% | 46.0% |
+
+- Colors are computed once per color change, never per frame. "By intensity" does not compute a color per bar either: the bars are drawn once as a mask over a single vertical gradient (MultiEffect).
+- Wave is one shape (`QtQuick.Shapes`, SVG path rebuilt once per frame), circular shows fewer bars (those that fit around the circle).
+- Smooth motion costs ~8 points more: the bars keep moving between cava frames, so the widget redraws on every poll instead of skipping repeated frames. It is off by default.
+
+How to read the first table:
 
 - **plasmashell also draws the panel and the other widgets.** With Cava Viz off it measured 9.4%, so that ~9% is not Cava Viz. Cava Viz itself uses ~20% when active and ~0% when paused.
 - **When paused, cava is frozen** (state `T`) and cava and the bridge drop to 0%.
@@ -181,7 +203,6 @@ Reload only what changed:
 
 - **Plasma slideshow:** Plasma does not expose which image its slideshow is showing (neither in its config file nor over D-Bus), so the wallpaper-based color modes need Cava Viz's own rotation.
 - **Busy wallpapers:** with many small color areas, the zone mode averages them and may pick colors that do not look right.
-- **Automatic mode** is experimental. On very detailed backgrounds it may push colors close to black or white to reach the contrast target.
 - **Single screen:** tested with one monitor only.
 - **Video wallpaper:** colors follow the video and change right at the cuts. The first time a video is shown, the bridge prepares it in the background: 2 frames per second in one low-priority pass (with VA-API hardware decoding a 125 s video takes ~4.5 s; otherwise keyframes only) and splits it into stable-color segments (scene changes). Each color response includes the next segment's colors and how many ms until it starts, and the widget schedules the change for that moment (0.25 s early, the transition length). The video time comes from a clock started when the video starts or loops; plasmashell's file read position only detects start, loop and pauses (a drift over 3 s is corrected). For **exact** sync, `install.sh` installs a copy of the video plugin in `~/.local/share/plasma/wallpapers/` (`video_plugin.py`) that only adds a report: every 0.5 s it tells the bridge the video's current second and whether it is paused (`/videopos`; it does not run on the lock screen). No commands needed: every 10 s the bridge creates the copy if missing or rebuilds it if the system plugin was updated (if the report no longer fits, it removes it and the original is used). So Plasma picks it up without restarting the desktop, it reloads only the video wallpaper (switches to image and back to video 1.5 s later; the video settings are kept): after writing a new copy and, once per Plasma session, if the wallpaper is a video but no report arrives within 15 s. `./install.sh --uninstall` deletes it. Without the copy the previous estimate is used, tunable with `VIEW_DELAY` (0.5 s) in `cava_bridge.py`. Up to 30 prepared videos are kept.
 

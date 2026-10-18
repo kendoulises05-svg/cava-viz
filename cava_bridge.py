@@ -9,12 +9,8 @@ Endpoints (solo 127.0.0.1):
   /bars?n=N&ch=stereo|mono&fps=F      cambia barras, canales y frames por segundo, y reinicia cava
   (apagado a mano, "/" responde "D"; en pausa por ventana o bloqueo, responde "P")
   /palette?cid=&aspect=               colores vivos del wallpaper (JSON)
-  /zones?n=&l=&r=&swap=&aspect=&cid=  un color por barra según la columna del wallpaper;
-                                      swap=1 intercambia esos colores (JSON)
-  /contrast?n=&l=&r=&t=&b=&swap=&...  mismo tono que lo que hay detrás, brillo invertido;
-                                      swap=1 además intercambia esos colores (JSON)
-  /auto?n=&l=&r=&t=&b=&swap=&...      EXPERIMENTAL: color de su zona, ajustado hasta que se distinga
-                                      del fondo detrás del widget (contrast ratio WCAG >= 3:1) (JSON)
+  /zones?n=&l=&r=&swap=&aspect=&cid=  un color por barra según la columna del wallpaper, siempre
+                                      vivo y claro; swap=1 intercambia esos colores (JSON)
   /rotation?enabled=&dir=&seconds=&order=    config de la rotación (la manda el widget)
   /next                               cambia al siguiente wallpaper
   /videopos?f=&t=&d=&p=               posicion exacta del fondo de video (la manda la copia del
@@ -985,14 +981,9 @@ def colors_for(img, imgkey, endpoint, n, l, r, t, b, swap):
             _results.clear()
         if endpoint == "/palette":
             _results[key] = palette(img)
-        elif endpoint == "/zones":
-            cols = zones(img, n, l, r)
-            _results[key] = swap_colors(cols, img) if swap else cols
-        elif endpoint == "/auto":
-            _results[key] = auto_colors(img, n, l, r, t, b, swap)
         else:
-            # En contraste no se intercambia: invertir deshace el contraste
-            _results[key] = contrast_bright(img, n, l, r, t, b)
+            cols = zones(img, n, l, r)
+            _results[key] = [vivid(c) for c in swap_colors(cols, img)] if swap else cols
     return _results[key]
 
 
@@ -1062,6 +1053,17 @@ def boost(rgb, min_v=0.6):
         # En píxeles casi negros el tono es ruido: sin esto un café oscuro se vuelve rojo intenso
         s *= min(1.0, v / 0.3)
     r, g, b = colorsys.hsv_to_rgb(h, s, max(v, min_v))
+    return [round(r * 255), round(g * 255), round(b * 255)]
+
+
+def vivid(rgb):
+    """Color de barra que siempre se ve: brillo alto y, si tiene tono, más saturado.
+    Un gris queda gris claro (no se inventa un tono)."""
+    h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
+    s *= min(1.0, v / 0.3)      # en píxeles casi negros el tono es ruido
+    if s > 0.12:
+        s = min(1.0, max(s * 1.3, 0.55))
+    r, g, b = colorsys.hsv_to_rgb(h, s, max(v, 0.82))
     return [round(r * 255), round(g * 255), round(b * 255)]
 
 
@@ -1185,33 +1187,11 @@ def zones(img, n, left, right):
             else:
                 cols[k] = avg[k, 0]
         i = j
-    return [boost(c) for c in smooth(cols)]
+    return [vivid(c) for c in smooth(cols)]
 
 
 def color_distance(a, b):
     return sum((a[k] - b[k]) ** 2 for k in range(3)) ** 0.5
-
-
-def contrast_bright(img, n, left, right, top, bottom):
-    # Mismo tono que lo que hay DETRÁS del widget, con el brillo invertido
-    w, h = img.size
-    x0, y0 = int(left * w), int(top * h)
-    x1, y1 = max(x0 + 1, int(right * w)), max(y0 + 1, int(bottom * h))
-    cells = img.crop((x0, y0, x1, y1)).resize((n, 1), Image.Resampling.BOX).load()
-    cols = []
-    for i in range(n):
-        r, g, b = cells[i, 0]
-        lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255  # brillo percibido (0 negro, 1 blanco)
-        hh, s, v0 = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-        s *= min(1.0, v0 / 0.3)  # en fondos casi negros el tono es ruido: gris oscuro -> barras blancas, no crema
-        if s < 0.12:
-            s = 0.0  # fondo prácticamente gris: barras grises/blancas puras
-        # Fondo oscuro -> barra clara; fondo claro -> barra oscura (transición suave entre 0.4 y 0.6)
-        t = min(1.0, max(0.0, (lum - 0.4) / 0.2))
-        v = 0.95 * (1 - t) + 0.2 * t
-        rr, gg, bb = colorsys.hsv_to_rgb(hh, min(1.0, s * 1.15), v)
-        cols.append((round(rr * 255), round(gg * 255), round(bb * 255)))
-    return smooth(cols)
 
 
 def swap_colors(cols, img):
@@ -1231,72 +1211,6 @@ def swap_colors(cols, img):
     if len(pool) < 2:
         return cols
     return smooth([max(pool, key=lambda p: color_distance(p, c)) for c in cols])
-
-
-# ---------------- modo automático (experimental) ----------------
-
-MIN_CONTRAST = 3.0  # WCAG 2.x pide 3:1 como mínimo para elementos gráficos
-
-
-def rel_luminance(rgb):
-    # Luminancia relativa de WCAG: corrige la curva gamma de sRGB antes de ponderar los canales
-    def lin(c):
-        c /= 255
-        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-    r, g, b = (lin(c) for c in rgb)
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def contrast_ratio(a, b):
-    la, lb = rel_luminance(a), rel_luminance(b)
-    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
-
-
-def ensure_contrast(color, bg, target=MIN_CONTRAST):
-    """Oscurece o aclara el color, conservando el tono, hasta que se distinga del fondo."""
-    if contrast_ratio(color, bg) >= target:
-        return list(color)
-    h, s, v = colorsys.rgb_to_hsv(*(c / 255 for c in color))
-
-    def with_v(val):
-        r, g, b = colorsys.hsv_to_rgb(h, s, val)
-        return [round(r * 255), round(g * 255), round(b * 255)]
-
-    def search(make, lo, hi, want_low):
-        # Búsqueda binaria del cambio mínimo que alcanza el contraste
-        for _ in range(16):
-            mid = (lo + hi) / 2
-            ok = contrast_ratio(make(mid), bg) >= target
-            if ok == want_low:
-                lo = mid
-            else:
-                hi = mid
-        return make(lo if want_low else hi)
-
-    # 0.179 es la luminancia donde blanco y negro contrastan igual: arriba de eso conviene oscurecer
-    if rel_luminance(bg) > 0.179:
-        # Oscurecer: el v más alto (más parecido al original) que cumpla; en v=0 (negro) siempre cumple
-        return search(with_v, 0.0, v, want_low=True)
-    # Aclarar: primero subir v; si con v=1 no alcanza (ej. azul oscuro), mezclar hacia blanco
-    if contrast_ratio(with_v(1.0), bg) >= target:
-        return search(with_v, v, 1.0, want_low=False)
-    top = with_v(1.0)
-
-    def toward_white(t):
-        return [round(c + (255 - c) * t) for c in top]
-    return search(toward_white, 0.0, 1.0, want_low=False)
-
-
-def auto_colors(img, n, left, right, top, bottom, swap):
-    cols = zones(img, n, left, right)          # colores que combinan con la imagen
-    if swap:
-        cols = swap_colors(cols, img)
-    # Fondo real detrás de cada barra (solo el área del widget)
-    w, h = img.size
-    x0, y0 = int(left * w), int(top * h)
-    x1, y1 = max(x0 + 1, int(right * w)), max(y0 + 1, int(bottom * h))
-    bg = img.crop((x0, y0, x1, y1)).resize((n, 1), Image.Resampling.BOX).load()
-    return [ensure_contrast(cols[i], bg[i, 0]) for i in range(n)]
 
 
 # ---------------- HTTP ----------------
@@ -1357,7 +1271,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 pass
             return self.send(b"ok")
-        elif url.path in ("/palette", "/zones", "/contrast", "/auto"):
+        elif url.path in ("/palette", "/zones"):
             colors, extra = [], {}
             try:
                 aspect = float(q.get("aspect", 0))

@@ -1,9 +1,12 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Shapes
+import QtQuick.Effects
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.kirigami as Kirigami
 import org.kde.taskmanager as TaskManager
+import "palettes.js" as Palettes
 
 PlasmoidItem {
     id: root
@@ -23,7 +26,13 @@ PlasmoidItem {
     readonly property int orientation: Plasmoid.configuration.orientation   // 0 abajo, 1 espejo, 2 flotante
     readonly property real mirrorLine: Plasmoid.configuration.mirrorLine
     readonly property real mirrorOpacity: Plasmoid.configuration.mirrorOpacity
-    readonly property int colorMode: Plasmoid.configuration.colorMode       // 0 accent+2do, 1 zona
+    // 0 dos colores, 1 por zona, 2 degradado del fondo, 3 por intensidad, 4 color fijo, 5 paleta
+    readonly property int colorStyle: Math.max(0, Plasmoid.configuration.colorStyle)
+    readonly property int shape: Plasmoid.configuration.shape                 // 0 redondeadas, 1 rectas, 2 onda, 3 circular
+    readonly property bool barsShape: shape <= 1
+    readonly property real smoothing: Plasmoid.configuration.smoothing
+    readonly property color fixedColor: Plasmoid.configuration.fixedColor
+    readonly property int paletteIndex: Plasmoid.configuration.paletteIndex
     readonly property real colorBlend: Plasmoid.configuration.colorBlend
     readonly property int audioChannels: Plasmoid.configuration.audioChannels   // 0 stereo, 1 mono
     readonly property int bassLayout: Plasmoid.configuration.bassLayout         // 0 normal, 1 invertida
@@ -46,9 +55,16 @@ PlasmoidItem {
     // Respaldo mientras llega el color del wallpaper (o si el puente no puede leerlo)
     property color wallSecond: Qt.lighter(Kirigami.Theme.highlightColor, 1.6)
     property var zoneColors: []                 // [[r,g,b], ...] uno por barra
+    property var wallColors: []                 // colores vivos del fondo [[r,g,b], ...] (degradado, intensidad)
+    // Color de cada barra. Se calcula solo cuando cambia un color o el modo, nunca en cada frame.
+    property var barColors: []
+    property var waveStops: []                  // 9 colores de izquierda a derecha (onda)
+    property color lowColor: baseColor          // por intensidad: barra baja
+    property color highColor: wallSecond        // por intensidad: barra alta
 
     // ---------- Geometría (la actualiza fullRepresentation) ----------
     property real areaWidth: 1200
+    property real areaHeight: 200
     property real areaLeft: 0                   // borde izquierdo del widget en la pantalla (0-1)
     property real areaRight: 1                  // borde derecho del widget en la pantalla (0-1)
     property real areaTop: 0.75                 // borde superior del widget en la pantalla (0-1)
@@ -64,6 +80,10 @@ PlasmoidItem {
     }
 
     property var levels: []
+    property var rawLevels: []                  // último frame sin suavizar (movimiento suave)
+    property bool easing: false                 // movimiento suave: las barras todavía no llegan al frame
+    property string wavePath: ""                // onda: contorno relleno (PathSvg)
+    property string waveLine: ""                // onda: línea de arriba
     property var peaks: []
     property int silentCount: 0
     property bool busy: false
@@ -118,7 +138,7 @@ PlasmoidItem {
 
     // Al cambiar el ancho o el grosor, espera a que termine el ajuste antes de reiniciar cava
     onBarCountChanged: { barsDebounce.restart(); glowDebounce.restart() }
-    onAudioChannelsChanged: barsDebounce.restart()
+    onAudioChannelsChanged: { barsDebounce.restart(); glowDebounce.restart() }
     onFpsChanged: barsDebounce.restart()
     Timer {
         id: barsDebounce
@@ -127,21 +147,77 @@ PlasmoidItem {
                               + "&fps=" + root.fps, function () { root.fetchColors() })
     }
 
-    onColorModeChanged: fetchColors()
-    // ---------- Color del glow por contraste con la barra ----------
+    onColorStyleChanged: { fetchColors(); glowDebounce.restart() }
+    // ---------- Colores de las barras y del glow ----------
     // Cuando cambia cualquier cosa que afecta el color de las barras, se recalcula
     // (con 100 ms de espera para no repetir el cálculo varias veces seguidas)
     onZoneColorsChanged: glowDebounce.restart()
+    onWallColorsChanged: glowDebounce.restart()
     onWallSecondChanged: glowDebounce.restart()
     onBaseColorChanged: glowDebounce.restart()
     onColorBlendChanged: glowDebounce.restart()
     onBassLayoutChanged: glowDebounce.restart()
+    onFixedColorChanged: glowDebounce.restart()
+    onPaletteIndexChanged: glowDebounce.restart()
     onGlowEnabledChanged: glowDebounce.restart()
     onGlowColorModeChanged: glowDebounce.restart()
     Timer {
         id: glowDebounce
         interval: 100
-        onTriggered: root.recomputeGlow()
+        onTriggered: { root.recomputeColors(); root.recomputeGlow() }
+    }
+
+    // Antes había 4 modos (contraste y automático ya no existen): se pasa una sola vez al modo nuevo
+    Component.onCompleted: {
+        if (Plasmoid.configuration.colorStyle < 0)
+            Plasmoid.configuration.colorStyle = Plasmoid.configuration.colorMode === 0 ? 0 : 1
+        coverCheck.restart()   // primer aviso al puente (por si quedó una pausa vieja)
+        recomputeColors()
+    }
+
+    function rgb(c) { return Qt.rgba(c[0] / 255, c[1] / 255, c[2] / 255, 1) }
+    function mix(a, b, t) { return Qt.rgba(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 1) }
+    // Color en la posición t (0-1) de una lista de colores repartidos parejo
+    function along(stops, t) {
+        if (stops.length === 1) return stops[0]
+        var x = Math.max(0, Math.min(1, t)) * (stops.length - 1)
+        var k = Math.min(stops.length - 2, Math.floor(x))
+        return mix(stops[k], stops[k + 1], x - k)
+    }
+    // Hasta `max` colores del fondo bien distintos entre sí (la paleta del puente viene del más vivo al menos)
+    function distinctWall(max) {
+        var out = []
+        for (var i = 0; i < wallColors.length && out.length < max; i++) {
+            var c = rgb(wallColors[i]), dup = false
+            for (var k = 0; k < out.length; k++) if (colorDist(c, out[k]) < 0.3) { dup = true; break }
+            if (!dup) out.push(c)
+        }
+        if (out.length < 2) out = [baseColor, wallSecond]   // sin fondo legible: accent y 2do color
+        return out
+    }
+
+    function recomputeColors() {
+        var n = barCount, cols = [], i
+        var stops = colorStyle === 2 ? distinctWall(4)
+                  : colorStyle === 5 ? (Palettes.list[paletteIndex] || Palettes.list[0]).colors.map(function (h) { return Qt.lighter(h, 1) })
+                  : null
+        if (colorStyle === 3) {
+            var two = distinctWall(2)
+            lowColor = two[0]
+            highColor = two[1]
+        }
+        for (i = 0; i < n; i++) {
+            if (colorStyle === 1 && zoneColors.length === n) cols.push(rgb(zoneColors[i]))
+            else if (stops) cols.push(along(stops, bassT(i)))       // graves -> agudos
+            else if (colorStyle === 3) cols.push(mix(lowColor, highColor, 0.5))   // glow y onda; las barras usan el degradado vertical
+            else if (colorStyle === 4) cols.push(Qt.rgba(fixedColor.r, fixedColor.g, fixedColor.b, 1))
+            // Dos colores (y por zona mientras llegan los colores): el accent sigue a los graves
+            else cols.push(Qt.tint(baseColor, Qt.rgba(wallSecond.r, wallSecond.g, wallSecond.b, bassT(i) * colorBlend)))
+        }
+        barColors = cols
+        var ws = []
+        for (i = 0; i < 9; i++) ws.push(cols[Math.round(i / 8 * (n - 1))])
+        waveStops = ws
     }
 
     function colorDist(a, b) {
@@ -151,8 +227,8 @@ PlasmoidItem {
 
     function recomputeGlow() {
         if (!glowEnabled || glowColorMode !== 1) { glowColors = []; return }
-        var n = barCount, cols = [], i, k
-        for (i = 0; i < n; i++) cols.push(barColor(i))
+        var n = barCount, cols = barColors, i, k
+        if (cols.length !== n) return
         // Colores distintos presentes en las barras (se agrupan los casi iguales)
         var pool = []
         for (i = 0; i < n && pool.length < 6; i++) {
@@ -177,6 +253,9 @@ PlasmoidItem {
         }
         glowColors = out
     }
+    // Glow de la onda y del círculo: un solo color (el que más contrasta con el centro)
+    readonly property color glowSingle: glowColorMode === 1 && glowColors.length > 0
+                                        ? glowColors[Math.floor(glowColors.length / 2)] : barColor(Math.floor(barCount / 2))
     onZoneSwapChanged: fetchColors()
 
     // Envía la config de rotación al puente (él solo la guarda si cambió)
@@ -195,9 +274,14 @@ PlasmoidItem {
     function syncTerminal() { get("terminal?pause=" + (terminalPause ? 1 : 0), null) }
     onTerminalPauseChanged: syncTerminal()
 
+    function setWallColors(c) {
+        if (!c || c.length === 0) return       // sin imagen legible: se quedan los últimos
+        wallColors = c
+        setSecondColor(c)
+    }
     function setZoneColors(c) {
         // Lista vacía = el puente no sabe qué imagen hay (ej. presentación de Plasma): se usa el accent
-        zoneColors = (c.length === barCount) ? c : []
+        zoneColors = (c && c.length === barCount) ? c : []
     }
     function setSecondColor(c) {
         if (c.length === 0) return
@@ -218,7 +302,9 @@ PlasmoidItem {
     property var nextApply: null
     function applyResponse(t, apply) {
         if (!t) return
-        var res = JSON.parse(t)
+        var res
+        try { res = JSON.parse(t) } catch (e) { return }   // el puente se estaba reiniciando
+        if (!res || !res.colors) return
         root.liveVideo = !!res.live
         if (res.next && res.in !== undefined && res.in < 150) {
             apply(res.next)                 // el corte es ya: evita volver un instante al color anterior
@@ -246,28 +332,19 @@ PlasmoidItem {
         var cid = Plasmoid.containment ? Plasmoid.containment.id : -1
         var common = "cid=" + cid + "&aspect=" + screenAspect.toFixed(4)
         var span = "n=" + barCount + "&l=" + areaLeft.toFixed(4) + "&r=" + areaRight.toFixed(4)
-        if (colorMode === 1) {
+        if (colorStyle === 4 || colorStyle === 5) {
+            // Color fijo y paleta no dependen del fondo
+            liveVideo = false
+            nextSwitch.stop()
+        } else if (colorStyle === 1) {
             get("zones?" + span + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
-        } else if (colorMode === 2) {
-            get("contrast?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
-                + "&" + common, applyColors)
-        } else if (colorMode === 3) {
-            // Experimental: color de su zona, ajustado para que se distinga del fondo detrás del widget
-            get("auto?" + span + "&t=" + areaTop.toFixed(4) + "&b=" + areaBottom.toFixed(4)
-                + "&swap=" + (zoneSwap ? 1 : 0) + "&" + common, applyColors)
         } else {
-            get("palette?" + common, function (t) { root.applyResponse(t, root.setSecondColor) })
+            get("palette?" + common, function (t) { root.applyResponse(t, root.setWallColors) })
         }
     }
 
     function barColor(i) {
-        if (colorMode !== 0 && zoneColors.length === barCount) {
-            var z = zoneColors[i]
-            return Qt.rgba(z[0] / 255, z[1] / 255, z[2] / 255, 1)
-        }
-        // El gradiente sigue a los graves estén donde estén (centro, bordes o un lado)
-        var t = bassT(i)
-        return Qt.tint(baseColor, Qt.rgba(wallSecond.r, wallSecond.g, wallSecond.b, t * colorBlend))
+        return barColors[i] || baseColor
     }
 
     // ---------- Distribución de frecuencias ----------
@@ -312,7 +389,6 @@ PlasmoidItem {
     }
     onPauseRuleChanged: coverCheck.restart()
     onAreaRectChanged: coverCheck.restart()
-    Component.onCompleted: coverCheck.restart()   // primer aviso al puente (por si quedó una pausa vieja)
 
     Timer {
         id: coverCheck
@@ -365,6 +441,8 @@ PlasmoidItem {
         if (text === lastFrame && text !== "") {
             // Mismo frame: las barras no cambian, pero en silencio hay que seguir contando
             // (para ocultar el widget) y dejar caer peaks y glow hasta 0
+            // Movimiento suave: las barras siguen acercándose al último frame
+            if (easing) updateLevels(rawLevels)
             if (lastSum === 0) {
                 silentCount++
                 if (peaksActive) {
@@ -385,23 +463,44 @@ PlasmoidItem {
         manualOff = (text === "D")
         bridgePaused = (text === "P" || manualOff)   // en pausa o apagado: se consulta 1 vez por segundo
         var parts = bridgePaused ? [] : text.split(";")
-        var lv = []
-        var pk = []
+        var raw = []
         var sum = 0
-        var bassSum = 0, bassN = 0
         for (var i = 0; i < barCount; i++) {
             var v = parseInt(parts[srcIndex(i)]) || 0
-            lv.push(v)
+            raw.push(v)
             sum += v
+        }
+        silentCount = (sum === 0) ? silentCount + 1 : 0
+        lastSum = sum
+        rawLevels = raw
+        updateLevels(raw)
+    }
+
+    // Aplica un frame a las barras (con el movimiento suave, si está activo), los peaks, la onda y el glow
+    function updateLevels(raw) {
+        var lv = [], pk = []
+        var bassSum = 0, bassN = 0, moving = false
+        // Suave: cada frame recorre solo una parte del camino. Sube más rápido de lo que baja,
+        // así los golpes se siguen notando.
+        var down = 1 - smoothing * 0.88, up = Math.min(1, down * 1.8)
+        for (var i = 0; i < barCount; i++) {
+            var v = raw[i] || 0
+            if (smoothing > 0) {
+                var prev = levels[i] || 0, d = v - prev
+                v = prev + d * (d > 0 ? up : down)
+                if (Math.abs(v - raw[i]) < 0.5) v = raw[i]
+                else moving = true
+            }
+            lv.push(v)
             // "|| 0": tras cambiar la cantidad de barras, peaks puede ser más corto
             pk.push(Math.max(v, (peaks[i] || 0) - peakFall))
             if (bassT(i) < 0.15) { bassSum += v; bassN++ }   // el 15% más grave
         }
-        silentCount = (sum === 0) ? silentCount + 1 : 0
-        lastSum = sum
+        easing = moving
         peaksActive = true
         levels = lv
         peaks = pk
+        if (shape === 2) buildWave(lv)
         // Glow: se normaliza contra el pico reciente (el golpe más fuerte de los últimos
         // segundos vale 1), así pulsa con todo el rango aunque los graves nunca lleguen a 100
         var bass = bassN ? bassSum / bassN / 100 : 0
@@ -409,6 +508,41 @@ PlasmoidItem {
         var norm = Math.min(1, bass / bassPeak)
         // Sube de golpe con el bajo y cae despacio, así "pulsa"
         bassEnergy = norm > bassEnergy ? norm : bassEnergy * 0.9
+    }
+
+    // Onda: un contorno suave (curvas entre los puntos medios) en lugar de ~190 rectángulos.
+    // Se arma una vez por frame como texto SVG; Shape lo dibuja en un solo trazo.
+    function buildWave(lv) {
+        var w = areaWidth, h = areaHeight, n = lv.length
+        if (w <= 0 || h <= 0 || n < 2) { wavePath = ""; waveLine = ""; return }
+        var m = Math.max(8, Math.min(n, Math.floor(w / 8)))   // un punto cada ~8 px
+        var base = orientation === 0 ? h : orientation === 1 ? h * mirrorLine : h / 2
+        var amp = orientation === 2 ? h / 2 - 2 : base - 3
+        var xs = [], ys = []
+        for (var k = 0; k < m; k++) {
+            // El punto toma la barra más alta de su tramo (con menos puntos no se pierden golpes)
+            var a = Math.floor(k * n / m), b = Math.max(a + 1, Math.floor((k + 1) * n / m)), top = 0
+            for (var i = a; i < b; i++) if (lv[i] > top) top = lv[i]
+            xs.push(k * w / (m - 1))
+            ys.push(top / 100 * amp)
+        }
+        function curve(sign, from, to, step) {
+            var out = (xs[from]).toFixed(1) + " " + (base - sign * ys[from]).toFixed(1)
+            for (var k = from + step; k !== to; k += step) {
+                var mx = (xs[k] + xs[k + step]) / 2, my = base - sign * (ys[k] + ys[k + step]) / 2
+                out += " Q " + xs[k].toFixed(1) + " " + (base - sign * ys[k]).toFixed(1) + " " + mx.toFixed(1) + " " + my.toFixed(1)
+            }
+            return out + " L " + xs[to].toFixed(1) + " " + (base - sign * ys[to]).toFixed(1)
+        }
+        var upper = curve(1, 0, m - 1, 1)
+        if (orientation === 2) {
+            var lower = curve(-1, m - 1, 0, -1)
+            wavePath = "M " + upper + " L " + lower + " Z"
+            waveLine = "M " + upper + " M " + lower
+        } else {
+            wavePath = "M 0 " + base.toFixed(1) + " L " + upper + " L " + w.toFixed(1) + " " + base.toFixed(1) + " Z"
+            waveLine = "M " + upper
+        }
     }
 
     Timer {
@@ -441,6 +575,7 @@ PlasmoidItem {
         // Calcula qué parte de la pantalla ocupa el widget (para el modo por zona)
         function updateGeometry() {
             root.areaWidth = width
+            root.areaHeight = height
             var w = area.Window.width
             var h = area.Window.height
             if (w > 0 && h > 0) {
@@ -457,6 +592,7 @@ PlasmoidItem {
         }
 
         onWidthChanged: updateGeometry()
+        onHeightChanged: updateGeometry()
         Component.onCompleted: updateGeometry()
 
         // Fondo de video: solo los colores, cada medio segundo, para seguir al video (el resto
@@ -493,11 +629,11 @@ PlasmoidItem {
         Item {
             id: glowLayer
             anchors.fill: parent
-            visible: root.glowEnabled
+            visible: root.glowEnabled && root.barsShape
             opacity: root.glowStrength * (0.1 + 0.9 * root.bassEnergy) * 0.45
 
             Repeater {
-                model: root.glowEnabled ? root.barCount : 0   // apagado: no crea ningún rectángulo
+                model: root.glowEnabled && root.barsShape ? root.barCount : 0   // apagado: no crea ningún rectángulo
 
                 Rectangle {
                     readonly property real lv: (root.levels[index] || 0) / 100
@@ -520,75 +656,245 @@ PlasmoidItem {
             }
         }
 
-        Repeater {
-            model: root.barCount
+        // Por intensidad: las barras se dibujan aparte (sin mostrarse) y sirven de máscara sobre un
+        // degradado vertical; así el color depende de la altura sin calcular un color por barra.
+        readonly property bool intensityBars: root.colorStyle === 3 && root.barsShape
 
-            Item {
-                id: slot
-                x: index * area.slotWidth
-                width: area.slotWidth
-                height: area.height
+        Item {
+            id: barsLayer
+            anchors.fill: parent
+            visible: !area.intensityBars
+            layer.enabled: area.intensityBars
 
-                property color c: root.barColor(index)
-                Behavior on c { ColorAnimation { duration: root.liveVideo ? 250 : 600 } }   // al cambiar wallpaper o modo, el color se desliza en vez de saltar
-                readonly property real lv: (root.levels[index] || 0) / 100
-                readonly property real pk: (root.peaks[index] || 0) / 100
-                readonly property real barW: Math.min(root.barWidth, width)
-                // Espejo: altura de la línea. Arriba de ella van las barras, abajo el reflejo.
-                readonly property real line: height * root.mirrorLine
+            Repeater {
+                model: root.barsShape ? root.barCount : 0
 
-                // Barra principal
-                Rectangle {
-                    width: slot.barW
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    radius: width / 2
-                    color: slot.c
-                    height: root.orientation === 1
-                            ? Math.max(1, slot.line * slot.lv)
-                            : Math.max(2, slot.height * slot.lv)
-                    y: root.orientation === 0 ? slot.height - height
-                     : root.orientation === 1 ? slot.line - height
-                     : (slot.height - height) / 2
-                }
+                Item {
+                    id: slot
+                    x: index * area.slotWidth
+                    width: area.slotWidth
+                    height: area.height
 
-                // Reflejo (solo espejo): usa el espacio bajo la línea y se desvanece
-                Rectangle {
-                    visible: root.orientation === 1
-                    width: slot.barW
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    radius: width / 2
-                    y: slot.line + 1
-                    height: Math.max(1, (slot.height - slot.line - 1) * slot.lv)
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: Qt.rgba(slot.c.r, slot.c.g, slot.c.b, root.mirrorOpacity) }
-                        GradientStop { position: 1.0; color: "transparent" }
+                    property color c: root.barColor(index)
+                    Behavior on c { ColorAnimation { duration: root.liveVideo ? 250 : 600 } }   // al cambiar wallpaper o modo, el color se desliza en vez de saltar
+                    readonly property real lv: (root.levels[index] || 0) / 100
+                    readonly property real pk: (root.peaks[index] || 0) / 100
+                    readonly property real barW: Math.min(root.barWidth, width)
+                    // Espejo: altura de la línea. Arriba de ella van las barras, abajo el reflejo.
+                    readonly property real line: height * root.mirrorLine
+
+                    // Barra principal
+                    Rectangle {
+                        width: slot.barW
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        radius: root.shape === 1 ? 0 : width / 2
+                        color: slot.c
+                        height: root.orientation === 1
+                                ? Math.max(1, slot.line * slot.lv)
+                                : Math.max(2, slot.height * slot.lv)
+                        y: root.orientation === 0 ? slot.height - height
+                         : root.orientation === 1 ? slot.line - height
+                         : (slot.height - height) / 2
+                    }
+
+                    // Reflejo (solo espejo): usa el espacio bajo la línea y se desvanece
+                    Rectangle {
+                        visible: root.orientation === 1
+                        width: slot.barW
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        radius: root.shape === 1 ? 0 : width / 2
+                        y: slot.line + 1
+                        height: Math.max(1, (slot.height - slot.line - 1) * slot.lv)
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: Qt.rgba(slot.c.r, slot.c.g, slot.c.b, root.mirrorOpacity) }
+                            GradientStop { position: 1.0; color: "transparent" }
+                        }
+                    }
+
+                    // Peak superior
+                    Rectangle {
+                        visible: root.showPeaks
+                        width: slot.barW
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        height: 2
+                        radius: 1
+                        color: slot.c
+                        opacity: 0.85
+                        y: root.orientation === 0 ? Math.max(0, slot.height - slot.height * slot.pk - 4)
+                         : root.orientation === 1 ? Math.max(0, slot.line - slot.line * slot.pk - 4)
+                         : Math.max(0, (slot.height - slot.height * slot.pk) / 2 - 4)
+                    }
+
+                    // Peak inferior (solo flotante)
+                    Rectangle {
+                        visible: root.showPeaks && root.orientation === 2
+                        width: slot.barW
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        height: 2
+                        radius: 1
+                        color: slot.c
+                        opacity: 0.85
+                        y: Math.min(slot.height - 2, (slot.height + slot.height * slot.pk) / 2 + 2)
                     }
                 }
+            }
+        }
 
-                // Peak superior
-                Rectangle {
-                    visible: root.showPeaks
-                    width: slot.barW
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    height: 2
-                    radius: 1
-                    color: slot.c
-                    opacity: 0.85
-                    y: root.orientation === 0 ? Math.max(0, slot.height - slot.height * slot.pk - 4)
-                     : root.orientation === 1 ? Math.max(0, slot.line - slot.line * slot.pk - 4)
-                     : Math.max(0, (slot.height - slot.height * slot.pk) / 2 - 4)
+        // Degradado de "por intensidad": bajo en la base, alto arriba (espejo: desde la línea; flotante: desde el centro)
+        Rectangle {
+            id: intensitySource
+            anchors.fill: parent
+            visible: false
+            layer.enabled: area.intensityBars
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: root.highColor }
+                GradientStop { position: root.orientation === 1 ? root.mirrorLine : root.orientation === 2 ? 0.5 : 1.0; color: root.lowColor }
+                GradientStop { position: 1.0; color: root.orientation === 2 ? root.highColor : root.lowColor }
+            }
+        }
+        MultiEffect {
+            anchors.fill: parent
+            visible: area.intensityBars
+            source: area.intensityBars ? intensitySource : null
+            maskEnabled: true
+            maskSource: area.intensityBars ? barsLayer : null
+            // Probado: con 0.5 / 1.0 el borde y el reflejo conservan su transparencia (con 0 / 1 no recorta nada)
+            maskThresholdMin: 0.5
+            maskSpreadAtMin: 1.0
+        }
+
+        // ---------- Onda ----------
+        Item {
+            id: wave
+            anchors.fill: parent
+            visible: root.shape === 2
+            readonly property real base: root.orientation === 0 ? height : root.orientation === 1 ? height * root.mirrorLine : height / 2
+
+            // Glow: la línea de arriba, gruesa y transparente; pulsa con los graves como el de las barras
+            Shape {
+                anchors.fill: parent
+                visible: root.glowEnabled
+                opacity: root.glowStrength * (0.1 + 0.9 * root.bassEnergy) * 0.5
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    strokeColor: root.glowSingle
+                    strokeWidth: Math.max(6, root.barWidth * 2.5)
+                    fillColor: "transparent"
+                    capStyle: ShapePath.RoundCap
+                    joinStyle: ShapePath.RoundJoin
+                    PathSvg { path: wave.visible && root.glowEnabled ? root.waveLine : "" }
                 }
+            }
 
-                // Peak inferior (solo flotante)
-                Rectangle {
-                    visible: root.showPeaks && root.orientation === 2
-                    width: slot.barW
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    height: 2
-                    radius: 1
-                    color: slot.c
-                    opacity: 0.85
-                    y: Math.min(slot.height - 2, (slot.height + slot.height * slot.pk) / 2 + 2)
+            // Reflejo (solo espejo): la misma onda volteada bajo la línea
+            Shape {
+                anchors.fill: parent
+                visible: root.orientation === 1
+                opacity: root.mirrorOpacity * 0.6
+                preferredRendererType: Shape.CurveRenderer
+                transform: Scale { origin.y: wave.base; yScale: -(wave.height - wave.base) / Math.max(1, wave.base) }
+                ShapePath {
+                    strokeColor: "transparent"
+                    strokeWidth: -1       // sin trazo (solo relleno)
+                    fillGradient: waveFill
+                    PathSvg { path: wave.visible && root.orientation === 1 ? root.wavePath : "" }
+                }
+            }
+
+            Shape {
+                anchors.fill: parent
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    strokeColor: "transparent"
+                    strokeWidth: -1       // sin trazo (solo relleno)
+                    // Horizontal: los colores de las barras de izquierda a derecha.
+                    // Por intensidad: vertical, de la base hacia arriba (flotante: espejado al centro).
+                    fillGradient: LinearGradient {
+                        id: waveFill
+                        readonly property bool vertical: root.colorStyle === 3
+                        x1: 0; y1: vertical ? wave.base : 0
+                        x2: vertical ? 0 : wave.width
+                        y2: vertical ? wave.base - (root.orientation === 2 ? wave.height / 2 : wave.base) : 0
+                        spread: ShapeGradient.ReflectSpread
+                        GradientStop { position: 0.0;   color: root.waveStops[0] || root.baseColor }
+                        GradientStop { position: 0.125; color: root.waveStops[1] || root.baseColor }
+                        GradientStop { position: 0.25;  color: root.waveStops[2] || root.baseColor }
+                        GradientStop { position: 0.375; color: root.waveStops[3] || root.baseColor }
+                        GradientStop { position: 0.5;   color: root.waveStops[4] || root.baseColor }
+                        GradientStop { position: 0.625; color: root.waveStops[5] || root.baseColor }
+                        GradientStop { position: 0.75;  color: root.waveStops[6] || root.baseColor }
+                        GradientStop { position: 0.875; color: root.waveStops[7] || root.baseColor }
+                        GradientStop { position: 1.0;   color: root.waveStops[8] || root.baseColor }
+                    }
+                    PathSvg { path: wave.visible ? root.wavePath : "" }
+                }
+                // Brillo en el borde de arriba (blanco translúcido: queda bien sobre cualquier color)
+                ShapePath {
+                    strokeColor: Qt.rgba(1, 1, 1, 0.45)
+                    strokeWidth: 1.5
+                    fillColor: "transparent"
+                    capStyle: ShapePath.RoundCap
+                    joinStyle: ShapePath.RoundJoin
+                    PathSvg { path: wave.visible ? root.waveLine : "" }
+                }
+            }
+        }
+
+        // ---------- Circular ----------
+        // Barras alrededor de un círculo. Cada barra está girada una sola vez; en cada frame solo
+        // cambia su largo, igual que las barras normales.
+        Item {
+            id: circle
+            anchors.fill: parent
+            visible: root.shape === 3
+            readonly property real d: Math.min(width, height)
+            readonly property real r0: d * 0.3
+            readonly property real len: d / 2 - r0 - 2
+            readonly property int count: Math.max(24, Math.min(root.barCount,
+                                                  Math.floor(2 * Math.PI * r0 / (root.barWidth + root.barGap))))
+            readonly property real barW: Math.max(2, Math.min(root.barWidth, 2 * Math.PI * r0 / count - 1))
+
+            // Por intensidad: punta del color alto, base del color bajo
+            Gradient {
+                id: radialIntensity
+                GradientStop { position: 0.0; color: root.highColor }
+                GradientStop { position: 1.0; color: root.lowColor }
+            }
+
+            // Glow: un disco al centro que late con los graves
+            Rectangle {
+                visible: root.glowEnabled
+                anchors.centerIn: parent
+                width: 2 * Math.max(2, circle.r0 - 4)
+                height: width
+                radius: width / 2
+                color: root.glowSingle
+                opacity: root.glowStrength * (0.1 + 0.9 * root.bassEnergy) * 0.35
+                scale: 1 + 0.08 * root.bassEnergy
+            }
+
+            Repeater {
+                model: root.shape === 3 ? circle.count : 0
+
+                Item {
+                    id: ray
+                    x: (circle.width - width) / 2
+                    y: (circle.height - height) / 2
+                    width: circle.barW
+                    height: 2 * (circle.r0 + circle.len)
+                    rotation: index * 360 / circle.count     // 0 = arriba; stereo deja los graves abajo
+                    readonly property int src: Math.min(root.barCount - 1, Math.floor((index + 0.5) * root.barCount / circle.count))
+                    property color c: root.barColor(src)
+                    Behavior on c { ColorAnimation { duration: root.liveVideo ? 250 : 600 } }
+
+                    Rectangle {
+                        width: parent.width
+                        radius: root.colorStyle === 3 ? 0 : width / 2
+                        height: Math.max(2, circle.len * (root.levels[ray.src] || 0) / 100)
+                        y: ray.height / 2 - circle.r0 - height
+                        color: ray.c
+                        gradient: root.colorStyle === 3 ? radialIntensity : null
+                    }
                 }
             }
         }

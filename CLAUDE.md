@@ -33,6 +33,7 @@ QML no puede leer un stream continuo ni archivos locales (`XMLHttpRequest` sobre
 | `org.kendo.cavaviz/contents/ui/main.qml` | Widget: polling, dibujo, colores, glow, detección de pantalla completa |
 | `org.kendo.cavaviz/contents/ui/configWave.qml` | Página Wave: forma, audio, glow, rendimiento (fps), comportamiento |
 | `org.kendo.cavaviz/contents/ui/configColor.qml` | Página Color |
+| `org.kendo.cavaviz/contents/ui/palettes.js` | Paletas predefinidas del modo Paleta (las usan main.qml y configColor.qml) |
 | `org.kendo.cavaviz/contents/ui/configWallpaper.qml` | Página Wallpaper (rotación) |
 | `org.kendo.cavaviz/contents/config/main.xml` | Claves de configuración (kcfg) |
 | `org.kendo.cavaviz/contents/config/config.qml` | Registra las páginas Wave, Color, Wallpaper |
@@ -44,7 +45,7 @@ QML no puede leer un stream continuo ni archivos locales (`XMLHttpRequest` sobre
 
 ### Claves de configuración (main.xml)
 
-`barWidth barGap orientation mirrorLine mirrorOpacity colorMode colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule terminalPause`
+`shape smoothing barWidth barGap orientation mirrorLine mirrorOpacity colorMode(antigua) colorStyle fixedColor paletteIndex colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule terminalPause`
 
 Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config con `property alias cfg_<clave>`.
 
@@ -59,7 +60,7 @@ Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config c
 | `/bars?n=&ch=&fps=` | Barras, `stereo`/`mono` y fps; reinicia cava |
 | `/next` | Siguiente wallpaper |
 | `/rotation?enabled=&dir=&seconds=&order=` | Config de rotación (estado en `~/.local/state/cava-viz/rotation.json`) |
-| `/palette`, `/zones`, `/contrast`, `/auto` | Colores del wallpaper (JSON) |
+| `/palette`, `/zones` | Colores del wallpaper (JSON). Contraste y automático se quitaron el 2026-10-18 |
 
 ### Sistema de pausa actual (importante para las tareas)
 

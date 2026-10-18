@@ -14,7 +14,9 @@ Un widget visualizador de audio para el escritorio de KDE Plasma 6. Dibuja barra
 
 **Wave**
 - La cantidad de barras se ajusta sola al ancho del widget; solo eliges grosor y hueco en píxeles.
-- Tres orientaciones: desde abajo, espejo (con línea de reflejo ajustable) y flotante (centrada).
+- Cuatro estilos: barras redondeadas, barras rectas, onda (una curva suave rellena) y circular (barras alrededor de un círculo).
+- Tres orientaciones para barras y onda: desde abajo, espejo (con línea de reflejo ajustable) y flotante (centrada).
+- Movimiento suave: un deslizador opcional que suaviza el movimiento (sube más rápido de lo que baja, así los golpes se siguen notando).
 - Stereo o mono, con distribución de frecuencias normal o invertida.
 - Peaks, ocultar en silencio y transiciones suaves de color.
 - Glow que pulsa con los graves, con el color de la barra o un color de contraste automático.
@@ -23,10 +25,14 @@ Un widget visualizador de audio para el escritorio de KDE Plasma 6. Dibuja barra
 
 | Modo | Qué hace |
 |---|---|
-| Accent + 2do color | Los graves usan el color de acento de Plasma; los agudos, un color vivo tomado del wallpaper |
-| Por zona del wallpaper | Cada barra toma el color de la zona del wallpaper donde está. Opción para intercambiar colores entre zonas |
-| Contraste | Mismo tono que el fondo detrás del widget, con el brillo invertido |
-| Automático (experimental) | Color de la zona, oscurecido o aclarado solo lo necesario para alcanzar un contrast ratio WCAG de 3:1 contra el fondo |
+| Dos colores | Los graves usan el color de acento de Plasma; los agudos se mezclan hacia el color del wallpaper más distinto a él |
+| Por zona del fondo | Cada barra toma el color de la zona del wallpaper donde está, siempre claro y saturado para que se vea. Opción para intercambiar colores entre zonas |
+| Degradado del fondo | Los colores principales del wallpaper (hasta 4), repartidos de graves a agudos |
+| Por intensidad | Las barras bajas usan un color del wallpaper y las altas otro: el color sube con el volumen |
+| Color fijo | Un color que eliges tú |
+| Paleta | Una paleta lista (Neón, Atardecer, Océano, Fuego, Bosque, Hielo, Pastel, Arcoíris), de graves a agudos |
+
+Todos los modos que usan el wallpaper también siguen a un fondo de video.
 
 **Wallpaper**
 - Rotación desde una carpeta: aleatorio, alfabético o más recientes primero, con intervalo en horas, minutos y segundos.
@@ -74,12 +80,12 @@ Clic derecho sobre el widget > **Configure Cava Viz**:
 
 | Página | Opciones |
 |---|---|
-| Wave | Grosor y hueco, orientación, línea del espejo, canales y distribución de audio, glow, fps, pausar cuando, pausa con cava en terminal, peaks, ocultar en silencio |
-| Color | Modo de color, mezcla del accent, intercambio de colores entre zonas |
+| Wave | Estilo, movimiento suave, grosor y hueco, orientación, línea del espejo, canales y distribución de audio, glow, fps, pausar cuando, pausa con cava en terminal, peaks, ocultar en silencio |
+| Color | Modo de color y sus opciones (mezcla del accent, intercambio de colores entre zonas, color fijo, paleta) |
 | Wallpaper | Activar rotación, carpeta, orden, intervalo, botón de siguiente wallpaper |
 | Keyboard Shortcuts | Atajo para "siguiente wallpaper" |
 
-Los modos por zona, contraste y automático necesitan que Cava Viz controle el wallpaper. Si la presentación propia de Plasma está activa, el widget usa el color de acento (ver [Limitaciones conocidas](#limitaciones-conocidas)).
+Los modos que usan el wallpaper (dos colores, por zona, degradado, intensidad) necesitan que Cava Viz controle el wallpaper. Si la presentación propia de Plasma está activa, el widget usa el color de acento (ver [Limitaciones conocidas](#limitaciones-conocidas)).
 
 ## Cómo funciona
 
@@ -112,7 +118,7 @@ Endpoints del puente, útiles para scripts:
 | `/terminal?pause=1\|0` | Pausar o no mientras otro cava corre (lo manda el widget) |
 | `/pause`, `/resume` | Pausar o reanudar cava (los usa el widget cuando una ventana lo tapa) |
 | `/bars?n=&ch=` | Cantidad de barras y `stereo` / `mono` |
-| `/palette`, `/zones`, `/contrast`, `/auto` | Colores del wallpaper (JSON) |
+| `/palette`, `/zones` | Colores del wallpaper (JSON) |
 | `/rotation?enabled=&dir=&seconds=&order=` | Configuración de la rotación |
 
 Para asignarlos a atajos de teclado: System Settings > Keyboard > Shortcuts > Add New > Command or Script, con uno de estos comandos:
@@ -133,7 +139,23 @@ Medido el 2026-10-07 con [`tools/bench.sh`](tools/bench.sh): promedio real de 10
 | Apagado manual | 8.5% | 0.0% | 0.0% | 8.5% |
 | Tiling parcial con "Pausar cuando: pantalla completa o maximizada" (no pausa) | 32.9% | 1.9% | 3.4% | 38.2% |
 
-Cómo leerlo:
+Estilos y modos, medido el 2026-10-18 (190 barras, 45 fps, glow, espejo, fondo de video; el total incluye el ~9% del panel y otros widgets):
+
+| Configuración | plasmashell | Total |
+|---|---|---|
+| Barras redondeadas, por zona (referencia) | 30.4–32.1% | 36.0–37.9% |
+| Onda | 31.5% | 37.3% |
+| Circular | 20.9% | 26.8% |
+| Barras, por intensidad | 30.4–34.0% | 36.6–40.8% |
+| Onda, por intensidad | 26.5% | 33.0% |
+| Barras, degradado del fondo | 28.5% | 34.4% |
+| Barras, movimiento suave 60% | 39.7% | 46.0% |
+
+- Los colores se calculan una vez por cada cambio de color, nunca en cada frame. "Por intensidad" tampoco calcula un color por barra: las barras se dibujan una vez como máscara sobre un solo degradado vertical (MultiEffect).
+- La onda es una sola figura (`QtQuick.Shapes`, un path SVG que se arma una vez por frame); el circular muestra menos barras (las que caben alrededor del círculo).
+- El movimiento suave cuesta ~8 puntos más: las barras siguen moviéndose entre frames de cava, así que el widget redibuja en cada consulta en vez de saltarse los frames repetidos. Viene apagado.
+
+Cómo leer la primera tabla:
 
 - **plasmashell también dibuja el panel y los otros widgets.** Con Cava Viz apagado se midió 9.4%, así que ese ~9% no es de Cava Viz. Lo propio de Cava Viz es ~20% activo y ~0% en pausa.
 - **En pausa, cava se congela** (estado `T`) y cava y el puente caen a 0%.
@@ -181,7 +203,6 @@ Recarga solo lo que cambió:
 
 - **Presentación de Plasma:** Plasma no expone qué imagen está mostrando su presentación (ni en su archivo de configuración ni por D-Bus), así que los modos de color basados en el wallpaper necesitan la rotación propia de Cava Viz.
 - **Wallpapers con mucho detalle:** con muchas zonas pequeñas de color, el modo por zona las promedia y puede elegir colores que no se vean bien.
-- **El modo automático** es experimental. En fondos muy detallados puede llevar los colores cerca del negro o el blanco para alcanzar el contraste.
 - **Una sola pantalla:** probado solo con un monitor.
 - **Fondo de video:** los colores siguen al video y cambian justo en los cortes. La primera vez que se ve un video, el puente lo prepara en segundo plano: 2 fotogramas por segundo de una pasada con prioridad baja (con decodificación por hardware VA-API un video de 125 s tarda ~4,5 s; sin ella usa solo los fotogramas clave) y lo divide en tramos de color estable (cambios de escena). Cada respuesta de colores incluye los del tramo siguiente y en cuántos ms empieza, y el widget programa el cambio para ese momento (0,25 s antes, lo que dura la transición). El momento del video se cuenta con un reloj desde que empieza o vuelve a empezar; la lectura del archivo por plasmashell solo detecta inicio, repetición y pausas (si se desfasan más de 3 s, se corrige). Para que vaya **exacto**, `install.sh` instala una copia del plugin de video en `~/.local/share/plasma/wallpapers/` (`video_plugin.py`) que solo agrega un aviso: cada 0,5 s le dice al puente en qué segundo va el video y si está en pausa (`/videopos`; en el lock screen no corre). No hace falta ningún comando: el puente revisa cada 10 s y crea la copia si falta o la rehace si el plugin del sistema se actualizó (si el aviso ya no encaja, la quita y queda el original). Para que Plasma la use sin reiniciar el escritorio, recarga solo el fondo de video (lo cambia a imagen y vuelve al video 1,5 s después; la config del video se conserva): lo hace al escribir una copia nueva y, una vez por sesión de Plasma, si el fondo es video pero el aviso no llega en 15 s. `./install.sh --uninstall` la borra. Sin esa copia se usa la estimación anterior, ajustable con `VIEW_DELAY` (0,5 s) en `cava_bridge.py`. Se guardan hasta 30 videos preparados.
 
