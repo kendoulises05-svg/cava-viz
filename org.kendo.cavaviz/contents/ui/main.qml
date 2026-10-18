@@ -32,7 +32,11 @@ PlasmoidItem {
     readonly property bool barsShape: shape <= 1
     readonly property real smoothing: Plasmoid.configuration.smoothing
     readonly property color fixedColor: Plasmoid.configuration.fixedColor
-    readonly property int paletteIndex: Plasmoid.configuration.paletteIndex
+    readonly property int paletteIndex: Plasmoid.configuration.paletteIndex      // -1 = paleta propia
+    readonly property string customPalette: Plasmoid.configuration.customPalette
+    readonly property bool twoColorsCustom: Plasmoid.configuration.twoColorsCustom
+    readonly property color twoColorLow: Plasmoid.configuration.twoColorLow
+    readonly property color twoColorHigh: Plasmoid.configuration.twoColorHigh
     readonly property real colorBlend: Plasmoid.configuration.colorBlend
     readonly property int audioChannels: Plasmoid.configuration.audioChannels   // 0 stereo, 1 mono
     readonly property int bassLayout: Plasmoid.configuration.bassLayout         // 0 normal, 1 invertida
@@ -159,6 +163,10 @@ PlasmoidItem {
     onBassLayoutChanged: glowDebounce.restart()
     onFixedColorChanged: glowDebounce.restart()
     onPaletteIndexChanged: glowDebounce.restart()
+    onCustomPaletteChanged: glowDebounce.restart()
+    onTwoColorsCustomChanged: { fetchColors(); glowDebounce.restart() }
+    onTwoColorLowChanged: glowDebounce.restart()
+    onTwoColorHighChanged: glowDebounce.restart()
     onGlowEnabledChanged: glowDebounce.restart()
     onGlowColorModeChanged: glowDebounce.restart()
     Timer {
@@ -196,11 +204,24 @@ PlasmoidItem {
         return out
     }
 
+    // Paleta elegida: una de palettes.js o la propia (-1)
+    function paletteStops() {
+        var hex = paletteIndex < 0 ? customPalette.split(",")
+                : (Palettes.list[paletteIndex] || Palettes.list[0]).colors
+        var out = []
+        for (var k = 0; k < hex.length; k++) {
+            var h = hex[k].trim()
+            if (/^#[0-9a-fA-F]{6}$/.test(h)) out.push(Qt.lighter(h, 1))
+        }
+        return out.length ? out : [baseColor, wallSecond]
+    }
+
     function recomputeColors() {
         var n = barCount, cols = [], i
-        var stops = colorStyle === 2 ? distinctWall(4)
-                  : colorStyle === 5 ? (Palettes.list[paletteIndex] || Palettes.list[0]).colors.map(function (h) { return Qt.lighter(h, 1) })
-                  : null
+        // Dos colores: los que eligió el usuario, o el acento de Plasma y el color del fondo
+        var lowTwo = twoColorsCustom ? twoColorLow : baseColor
+        var highTwo = twoColorsCustom ? twoColorHigh : wallSecond
+        var stops = colorStyle === 2 ? distinctWall(4) : colorStyle === 5 ? paletteStops() : null
         if (colorStyle === 3) {
             var two = distinctWall(2)
             lowColor = two[0]
@@ -211,8 +232,8 @@ PlasmoidItem {
             else if (stops) cols.push(along(stops, bassT(i)))       // graves -> agudos
             else if (colorStyle === 3) cols.push(mix(lowColor, highColor, 0.5))   // glow y onda; las barras usan el degradado vertical
             else if (colorStyle === 4) cols.push(Qt.rgba(fixedColor.r, fixedColor.g, fixedColor.b, 1))
-            // Dos colores (y por zona mientras llegan los colores): el accent sigue a los graves
-            else cols.push(Qt.tint(baseColor, Qt.rgba(wallSecond.r, wallSecond.g, wallSecond.b, bassT(i) * colorBlend)))
+            // Dos colores (y por zona mientras llegan los colores): el primero sigue a los graves
+            else cols.push(mix(lowTwo, highTwo, bassT(i) * colorBlend))
         }
         barColors = cols
         var ws = []
@@ -332,8 +353,8 @@ PlasmoidItem {
         var cid = Plasmoid.containment ? Plasmoid.containment.id : -1
         var common = "cid=" + cid + "&aspect=" + screenAspect.toFixed(4)
         var span = "n=" + barCount + "&l=" + areaLeft.toFixed(4) + "&r=" + areaRight.toFixed(4)
-        if (colorStyle === 4 || colorStyle === 5) {
-            // Color fijo y paleta no dependen del fondo
+        if (colorStyle === 4 || colorStyle === 5 || (colorStyle === 0 && twoColorsCustom)) {
+            // Color fijo, paleta y dos colores elegidos no dependen del fondo
             liveVideo = false
             nextSwitch.stop()
         } else if (colorStyle === 1) {

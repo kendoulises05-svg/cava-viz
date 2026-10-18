@@ -25,12 +25,12 @@ An audio visualizer widget for the KDE Plasma 6 desktop. It draws thin, reactive
 
 | Mode | What it does |
 |---|---|
-| Two colors | Bass uses the Plasma accent color; treble blends into the wallpaper color most different from it |
+| Two colors | Bass uses the Plasma accent color and treble blends into the wallpaper color most different from it, or you pick both colors |
 | By wallpaper zone | Each bar takes the color of the wallpaper area it sits under, always bright and saturated enough to be seen. Optional color swap between zones |
 | Wallpaper gradient | The wallpaper's main colors (up to 4), spread from bass to treble |
 | By intensity | Low bars use one wallpaper color and tall bars another: the color rises with the volume |
 | Fixed color | One color you pick |
-| Palette | A ready-made palette (Neon, Sunset, Ocean, Fire, Forest, Ice, Pastel, Rainbow), spread from bass to treble |
+| Palette | A ready-made palette (Neon, Sunset, Ocean, Fire, Forest, Ice, Pastel, Rainbow) or your own (2 to 6 colors), spread from bass to treble |
 
 Every wallpaper-based mode also follows a video wallpaper.
 

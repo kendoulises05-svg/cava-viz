@@ -45,7 +45,7 @@ QML no puede leer un stream continuo ni archivos locales (`XMLHttpRequest` sobre
 
 ### Claves de configuración (main.xml)
 
-`shape smoothing barWidth barGap orientation mirrorLine mirrorOpacity colorMode(antigua) colorStyle fixedColor paletteIndex colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule terminalPause`
+`shape smoothing barWidth barGap orientation mirrorLine mirrorOpacity colorMode(antigua) colorStyle fixedColor paletteIndex customPalette twoColorsCustom twoColorLow twoColorHigh colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule terminalPause`
 
 Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config con `property alias cfg_<clave>`.
 

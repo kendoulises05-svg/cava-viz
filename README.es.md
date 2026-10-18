@@ -25,12 +25,12 @@ Un widget visualizador de audio para el escritorio de KDE Plasma 6. Dibuja barra
 
 | Modo | Qué hace |
 |---|---|
-| Dos colores | Los graves usan el color de acento de Plasma; los agudos se mezclan hacia el color del wallpaper más distinto a él |
+| Dos colores | Los graves usan el color de acento de Plasma y los agudos se mezclan hacia el color del wallpaper más distinto a él, o eliges tú los dos colores |
 | Por zona del fondo | Cada barra toma el color de la zona del wallpaper donde está, siempre claro y saturado para que se vea. Opción para intercambiar colores entre zonas |
 | Degradado del fondo | Los colores principales del wallpaper (hasta 4), repartidos de graves a agudos |
 | Por intensidad | Las barras bajas usan un color del wallpaper y las altas otro: el color sube con el volumen |
 | Color fijo | Un color que eliges tú |
-| Paleta | Una paleta lista (Neón, Atardecer, Océano, Fuego, Bosque, Hielo, Pastel, Arcoíris), de graves a agudos |
+| Paleta | Una paleta lista (Neón, Atardecer, Océano, Fuego, Bosque, Hielo, Pastel, Arcoíris) o la tuya (de 2 a 6 colores), de graves a agudos |
 
 Todos los modos que usan el wallpaper también siguen a un fondo de video.
 
