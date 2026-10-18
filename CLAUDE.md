@@ -33,6 +33,7 @@ QML no puede leer un stream continuo ni archivos locales (`XMLHttpRequest` sobre
 | `org.kendo.cavaviz/contents/ui/main.qml` | Widget: polling, dibujo, colores, glow, detección de pantalla completa |
 | `org.kendo.cavaviz/contents/ui/configWave.qml` | Página Wave: forma, audio, glow, rendimiento (fps), comportamiento |
 | `org.kendo.cavaviz/contents/ui/configColor.qml` | Página Color |
+| `org.kendo.cavaviz/contents/ui/configStyles.qml` | Página Estilos: tiene su propia copia (cfg_) de las claves de forma y color, porque Plasma guarda solo la página abierta |
 | `org.kendo.cavaviz/contents/ui/palettes.js` | Paletas predefinidas del modo Paleta (las usan main.qml y configColor.qml) |
 | `org.kendo.cavaviz/contents/ui/configWallpaper.qml` | Página Wallpaper (rotación) |
 | `org.kendo.cavaviz/contents/config/main.xml` | Claves de configuración (kcfg) |
@@ -45,7 +46,7 @@ QML no puede leer un stream continuo ni archivos locales (`XMLHttpRequest` sobre
 
 ### Claves de configuración (main.xml)
 
-`shape smoothing barWidth barGap orientation mirrorLine mirrorOpacity colorMode(antigua) colorStyle fixedColor paletteIndex customPalette twoColorsCustom twoColorLow twoColorHigh colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule terminalPause`
+`shape smoothing barWidth barGap orientation mirrorLine mirrorOpacity colorMode(antigua) colorStyle fixedColor paletteIndex customPalette twoColorsCustom twoColorLow twoColorHigh savedStyles colorBlend zoneSwap showPeaks peakFall hideOnSilence fps audioChannels bassLayout glowEnabled glowStrength glowColorMode rotationEnabled rotationDir rotationIntervalSec rotationOrder pauseRule terminalPause`
 
 Se leen en QML con `Plasmoid.configuration.<clave>`; en las páginas de config con `property alias cfg_<clave>`.
 

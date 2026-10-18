@@ -21,6 +21,9 @@ An audio visualizer widget for the KDE Plasma 6 desktop. It draws thin, reactive
 - Peak caps, hide on silence and smooth color transitions.
 - Glow that pulses with the bass, using the bar color or an automatic contrasting color.
 
+**Styles**
+- Save the current look (shape, colors, glow, smooth motion) with a name and switch back with one click, plus 5 ready-made styles (Configure > Estilos).
+
 **Color modes**
 
 | Mode | What it does |
@@ -80,6 +83,7 @@ Right-click the widget > **Configure Cava Viz**:
 
 | Page | Options |
 |---|---|
+| Estilos | Save, use, replace and delete styles; ready-made styles |
 | Wave | Style, smooth motion, bar width and gap, orientation, mirror line, audio channels and layout, glow, fps, pause when, pause with cava in a terminal, peaks, hide on silence |
 | Color | Color mode and its options (accent blend, color swap between zones, fixed color, palette) |
 | Wallpaper | Enable rotation, folder, order, interval, next wallpaper button |

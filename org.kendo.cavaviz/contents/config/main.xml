@@ -34,6 +34,8 @@
     <entry name="colorBlend" type="Double"><default>0.85</default></entry>
     <!-- Por zona: true = intercambia los colores entre zonas (zorro naranja -> barras azules) -->
     <entry name="zoneSwap" type="Bool"><default>false</default></entry>
+    <!-- Estilos guardados (página Estilos): JSON [{"name": "...", "cfg": {clave: valor}}] -->
+    <entry name="savedStyles" type="String"><default>[]</default></entry>
     <entry name="showPeaks" type="Bool"><default>true</default></entry>
     <entry name="peakFall" type="Double"><default>0.8</default></entry>
     <entry name="hideOnSilence" type="Bool"><default>true</default></entry>

@@ -21,6 +21,9 @@ Un widget visualizador de audio para el escritorio de KDE Plasma 6. Dibuja barra
 - Peaks, ocultar en silencio y transiciones suaves de color.
 - Glow que pulsa con los graves, con el color de la barra o un color de contraste automático.
 
+**Estilos**
+- Guarda el aspecto actual (forma, colores, glow, movimiento suave) con un nombre y vuelve a él con un clic, además de 5 estilos listos (Configurar > Estilos).
+
 **Modos de color**
 
 | Modo | Qué hace |
@@ -80,6 +83,7 @@ Clic derecho sobre el widget > **Configure Cava Viz**:
 
 | Página | Opciones |
 |---|---|
+| Estilos | Guardar, usar, reemplazar y borrar estilos; estilos listos |
 | Wave | Estilo, movimiento suave, grosor y hueco, orientación, línea del espejo, canales y distribución de audio, glow, fps, pausar cuando, pausa con cava en terminal, peaks, ocultar en silencio |
 | Color | Modo de color y sus opciones (mezcla del accent, intercambio de colores entre zonas, color fijo, paleta) |
 | Wallpaper | Activar rotación, carpeta, orden, intervalo, botón de siguiente wallpaper |
