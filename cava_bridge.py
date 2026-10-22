@@ -906,19 +906,30 @@ def we_fetch_status():
     return {"available": True, "show": d.get("show") or "all", "muted": not d.get("audio", False)}
 
 
+_we_fetch_lock = threading.Lock()
+
+
 def we_fetch_quick(q):
-    """/wefetch?show=all|videos|images o ?mute=toggle: se lo pide a we-fetch (lo guarda y lo pone)."""
+    """/wefetch?show=all|videos|images o ?mute=toggle: se lo pide a we-fetch (lo guarda y lo pone).
+    De a uno: si llega otro mientras corre, se ignora (no se apilan procesos)."""
     exe = we_fetch_exe()
-    if exe:
-        if q.get("show") in ("all", "videos", "images"):
-            args = ["show", q["show"]]
-        elif q.get("mute") in ("on", "off", "toggle"):
-            args = ["mute", q["mute"]]
-        else:
-            return
-        r = subprocess.run([exe, "desktop", *args], capture_output=True, text=True, timeout=30)
-        if r.returncode != 0:
-            log(f"we-fetch desktop {' '.join(args)} fallo | {r.stderr.strip()[-200:]}")
+    if exe and _we_fetch_lock.acquire(blocking=False):
+        try:
+            _we_fetch_run(exe, q)
+        finally:
+            _we_fetch_lock.release()
+
+
+def _we_fetch_run(exe, q):
+    if q.get("show") in ("all", "videos", "images"):
+        args = ["show", q["show"]]
+    elif q.get("mute") in ("on", "off", "toggle"):
+        args = ["mute", q["mute"]]
+    else:
+        return
+    r = subprocess.run([exe, "desktop", *args], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        log(f"we-fetch desktop {' '.join(args)} fallo | {r.stderr.strip()[-200:]}")
 
 
 def rotation_step():
@@ -1288,6 +1299,9 @@ def swap_colors(cols, img):
 
 # ---------------- HTTP ----------------
 
+_rejected = {"at": -1e9}
+
+
 class Handler(BaseHTTPRequestHandler):
     def send(self, body, ctype="text/plain"):
         self.send_response(200)
@@ -1297,9 +1311,43 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def allowed(self):
+        """Solo el widget y la copia del plugin de video (Plasma, sin navegador). Escuchar en
+        127.0.0.1 no basta: una pagina web abierta en el navegador puede mandar pedidos a
+        127.0.0.1 (o leerlos con DNS rebinding). Por eso:
+          - Host tiene que ser 127.0.0.1/localhost (un dominio "rebindeado" trae su propio nombre);
+          - los navegadores siempre mandan Origin o Sec-Fetch-Site en pedidos de otra pagina;
+            el XMLHttpRequest de Plasma no manda ninguno de los dos."""
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        if self.headers.get("Origin") is not None:
+            return False
+        return self.headers.get("Sec-Fetch-Site", "none") in ("none", "same-origin")
+
     def do_GET(self):
+        if not self.allowed():
+            now = time.monotonic()
+            if now - _rejected["at"] > 60:          # como mucho una linea por minuto en el log
+                _rejected["at"] = now
+                log(f"Pedido rechazado (no viene del widget): {self.path.split('?')[0]} "
+                    f"Host={self.headers.get('Host')} Origin={self.headers.get('Origin')}")
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        try:
+            return self.route(url, q)
+        except (ValueError, TypeError) as e:
+            # parametros mal formados: 400 en vez de un traceback en el log
+            log(f"Pedido invalido {url.path}: {e}")
+            self.send_response(400)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    def route(self, url, q):
 
         if url.path == "/pause":
             if "covered" not in pause_reasons:
@@ -1354,7 +1402,7 @@ class Handler(BaseHTTPRequestHandler):
                 aspect = float(q.get("aspect", 0))
                 img = load_image(q.get("cid", "-1"), aspect)
                 if img is not None:
-                    n = int(q.get("n", bars))
+                    n = max(16, min(300, int(q.get("n", bars))))   # acotado: n enorme = memoria enorme
                     # Redondeo: mover el widget 1 px no debe invalidar el caché
                     l, r = round(float(q.get("l", 0)), 3), round(float(q.get("r", 1)), 3)
                     t, b = round(float(q.get("t", 0)), 3), round(float(q.get("b", 1)), 3)

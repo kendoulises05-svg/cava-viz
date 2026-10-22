@@ -106,6 +106,8 @@ flowchart LR
 
 Los widgets de Plasma no pueden leer la salida continua de un proceso, así que un pequeño puente en Python ejecuta cava, guarda el último frame y lo sirve por HTTP, escuchando solo en `127.0.0.1`. El mismo puente rota el wallpaper, lee la imagen con Pillow y calcula los colores de cada modo.
 
+Escuchar en `127.0.0.1` no basta: cualquier página web abierta en el navegador puede mandar pedidos a `127.0.0.1` (y leerlos con DNS rebinding). El puente solo responde pedidos cuyo `Host` es `127.0.0.1`/`localhost` y que no traen `Origin` ni `Sec-Fetch-Site` de otro sitio (los navegadores siempre los mandan; el `XMLHttpRequest` de QML de Plasma no manda ninguno); el resto recibe 403 y una línea en el log por minuto. Los parámetros van acotados (`n` de 16 a 300), los mal formados reciben 400 y los atajos de we-fetch corren de a uno.
+
 | Archivo | Función |
 |---|---|
 | `cava_bridge.py` | Puente: proceso de cava, servidor HTTP, rotación de wallpaper, modos de color, pausas |
